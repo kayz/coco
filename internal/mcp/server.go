@@ -6,10 +6,10 @@ import (
 	"github.com/pltanton/lingti-bot/internal/tools"
 )
 
-const (
-	ServerName    = "lingti-bot"
-	ServerVersion = "1.0.0"
-)
+const ServerName = "lingti-bot"
+
+// ServerVersion is set via ldflags at build time
+var ServerVersion = "1.0.0"
 
 // NewServer creates a new MCP server with all tools registered
 func NewServer() *server.MCPServer {
