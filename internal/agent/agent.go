@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"runtime"
 	"strings"
 
 	"github.com/pltanton/lingti-bot/internal/router"
@@ -104,19 +106,46 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 		},
 	}
 
-	// System prompt
-	systemPrompt := `You are a helpful AI assistant. You have access to various tools to help users:
+	// Get system info for context
+	homeDir, _ := os.UserHomeDir()
+	if homeDir == "" {
+		homeDir = "~"
+	}
 
-- File operations: list, read, write, search, delete old files
-- Calendar: list events, create events, search events
+	// System prompt with actual paths
+	systemPrompt := fmt.Sprintf(`You are a helpful AI assistant running on the user's computer.
+
+## System Environment
+- Operating System: %s
+- Architecture: %s
+- Home Directory: %s
+- Desktop: %s/Desktop
+- Documents: %s/Documents
+- Downloads: %s/Downloads
+
+## Available Tools
+- File operations: list, read, write, search files. Use ~ for home directory (e.g., ~/Desktop)
+- Calendar: list events, create events, search events (macOS)
+- Reminders: list, add, complete reminders (macOS)
+- Notes: list, read, create, search notes (macOS)
+- Weather: get current weather and forecast
+- Web: search the web, fetch URL content, open URLs in browser
+- Clipboard: read and write clipboard content
+- Screenshot: capture screen
+- Music: control Spotify/Apple Music playback
+- Notifications: send system notifications
 - System info: CPU, memory, disk usage
 - Shell commands: execute commands (be careful!)
-- Browser: open URLs in the default web browser (use open_url tool)
-- Process management: list, info, kill
+- Process management: list, info, kill processes
 
-When users ask you to do something, use the appropriate tools. Be concise in your responses.
-Always confirm before performing destructive actions (delete, kill process, etc.).
-When users ask to open a website or URL, use the open_url tool.`
+## Important
+- When users mention "桌面" or "Desktop", use path: ~/Desktop
+- When users mention "下载" or "Downloads", use path: ~/Downloads
+- When users mention "文档" or "Documents", use path: ~/Documents
+- Always use ~ prefix for home directory paths, the system will expand it automatically
+- Be concise in your responses
+- Confirm before destructive actions (delete, kill process)
+- When users ask to open a website or URL, use the open_url tool`, runtime.GOOS, runtime.GOARCH, homeDir, homeDir, homeDir, homeDir)
 
 	// Call AI provider
 	resp, err := a.provider.Chat(ctx, ChatRequest{
@@ -170,28 +199,28 @@ func (a *Agent) buildToolsList() []Tool {
 		// === FILE OPERATIONS ===
 		{
 			Name:        "file_read",
-			Description: "Read the contents of a file",
+			Description: "Read the contents of a file. Use ~ for home directory.",
 			InputSchema: jsonSchema(map[string]any{
 				"type":       "object",
-				"properties": map[string]any{"path": map[string]string{"type": "string", "description": "Path to the file"}},
+				"properties": map[string]any{"path": map[string]string{"type": "string", "description": "Path to the file (use ~ for home, e.g., ~/Desktop/file.txt)"}},
 				"required":   []string{"path"},
 			}),
 		},
 		{
 			Name:        "file_list",
-			Description: "List contents of a directory",
+			Description: "List contents of a directory. Use ~/Desktop for desktop, ~/Downloads for downloads, etc.",
 			InputSchema: jsonSchema(map[string]any{
 				"type":       "object",
-				"properties": map[string]any{"path": map[string]string{"type": "string", "description": "Directory path"}},
+				"properties": map[string]any{"path": map[string]string{"type": "string", "description": "Directory path (use ~ for home, e.g., ~/Desktop)"}},
 			}),
 		},
 		{
 			Name:        "file_list_old",
-			Description: "List files not modified for specified days",
+			Description: "List files not modified for specified days. Use ~/Desktop for desktop, etc.",
 			InputSchema: jsonSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"path": map[string]string{"type": "string", "description": "Directory path"},
+					"path": map[string]string{"type": "string", "description": "Directory path (use ~ for home, e.g., ~/Desktop)"},
 					"days": map[string]string{"type": "number", "description": "Minimum days since modification"},
 				},
 				"required": []string{"path"},
