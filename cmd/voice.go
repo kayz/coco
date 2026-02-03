@@ -107,6 +107,19 @@ func runVoice(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Check and download whisper model if using system provider
+	if voiceProvider == "" || voiceProvider == "system" {
+		if voice.FindWhisperModel() == "" {
+			fmt.Println("📦 Whisper model not found. Downloading base model (141MB)...")
+			if err := voice.DownloadWhisperModel("base"); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to download model: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'lingti-bot setup' for manual installation instructions")
+				os.Exit(1)
+			}
+			fmt.Println("✅ Model downloaded successfully")
+		}
+	}
+
 	// Create voice recorder/transcriber
 	recorder, err := voice.NewRecorder(voice.RecorderConfig{
 		Provider: voiceProvider,
@@ -114,6 +127,7 @@ func runVoice(cmd *cobra.Command, args []string) {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating voice recorder: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Run 'lingti-bot setup' for installation instructions")
 		os.Exit(1)
 	}
 

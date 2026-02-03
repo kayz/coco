@@ -345,7 +345,7 @@ func (p *SystemProvider) macSTT(ctx context.Context, audio []byte, opts STTOptio
 	}
 
 	// Find model file
-	modelPath := findWhisperModel()
+	modelPath := FindWhisperModel()
 	if modelPath == "" {
 		return "", fmt.Errorf("whisper model not found (download from https://huggingface.co/ggerganov/whisper.cpp)")
 	}
@@ -360,8 +360,8 @@ func (p *SystemProvider) macSTT(ctx context.Context, audio []byte, opts STTOptio
 	return strings.TrimSpace(string(output)), nil
 }
 
-// findWhisperModel searches for a whisper model file
-func findWhisperModel() string {
+// FindWhisperModel searches for a whisper model file
+func FindWhisperModel() string {
 	homeDir, _ := os.UserHomeDir()
 
 	// Common model locations
@@ -399,6 +399,83 @@ func findWhisperModel() string {
 	}
 
 	return ""
+}
+
+// GetWhisperModelDir returns the directory for whisper models
+func GetWhisperModelDir() string {
+	homeDir, _ := os.UserHomeDir()
+
+	// Use platform-appropriate location
+	switch runtime.GOOS {
+	case "windows":
+		return filepath.Join(homeDir, "AppData", "Local", "whisper")
+	default:
+		return filepath.Join(homeDir, ".local", "share", "whisper")
+	}
+}
+
+// DownloadWhisperModel downloads a whisper model
+func DownloadWhisperModel(model string) error {
+	// Model URLs from huggingface
+	modelURLs := map[string]string{
+		"tiny":   "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+		"base":   "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+		"small":  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+		"medium": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+		"large":  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large.bin",
+	}
+
+	url, ok := modelURLs[model]
+	if !ok {
+		return fmt.Errorf("unknown model: %s (available: tiny, base, small, medium, large)", model)
+	}
+
+	// Create model directory
+	modelDir := GetWhisperModelDir()
+	if err := os.MkdirAll(modelDir, 0755); err != nil {
+		return fmt.Errorf("failed to create model directory: %w", err)
+	}
+
+	modelPath := filepath.Join(modelDir, fmt.Sprintf("ggml-%s.bin", model))
+
+	// Check if already exists
+	if _, err := os.Stat(modelPath); err == nil {
+		return nil // Already downloaded
+	}
+
+	// Download the model
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to download model: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("download failed with status: %d", resp.StatusCode)
+	}
+
+	// Create temp file first
+	tmpFile, err := os.CreateTemp(modelDir, "download-*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	// Download with progress
+	_, err = io.Copy(tmpFile, resp.Body)
+	tmpFile.Close()
+	if err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("download failed: %w", err)
+	}
+
+	// Rename to final location
+	if err := os.Rename(tmpPath, modelPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to save model: %w", err)
+	}
+
+	return nil
 }
 
 // OpenAIProvider uses OpenAI's TTS/STT APIs
