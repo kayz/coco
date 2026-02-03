@@ -14,20 +14,23 @@ import (
 	"github.com/pltanton/lingti-bot/internal/platforms/slack"
 	"github.com/pltanton/lingti-bot/internal/platforms/telegram"
 	"github.com/pltanton/lingti-bot/internal/router"
+	"github.com/pltanton/lingti-bot/internal/voice"
 	"github.com/spf13/cobra"
 )
 
 var (
-	slackBotToken   string
-	slackAppToken   string
-	feishuAppID     string
-	feishuAppSecret string
-	telegramToken   string
-	discordToken    string
-	aiProvider      string
-	aiAPIKey        string
-	aiBaseURL       string
-	aiModel         string
+	slackBotToken    string
+	slackAppToken    string
+	feishuAppID      string
+	feishuAppSecret  string
+	telegramToken    string
+	discordToken     string
+	aiProvider       string
+	aiAPIKey         string
+	aiBaseURL        string
+	aiModel          string
+	voiceSTTProvider string
+	voiceSTTAPIKey   string
 )
 
 var routerCmd = &cobra.Command{
@@ -38,9 +41,13 @@ var routerCmd = &cobra.Command{
 
 Supported platforms:
   - Slack: SLACK_BOT_TOKEN + SLACK_APP_TOKEN
-  - Telegram: TELEGRAM_BOT_TOKEN
+  - Telegram: TELEGRAM_BOT_TOKEN (supports voice messages with VOICE_STT_PROVIDER)
   - Discord: DISCORD_BOT_TOKEN
   - Feishu: FEISHU_APP_ID + FEISHU_APP_SECRET
+
+Voice message transcription (optional):
+  - VOICE_STT_PROVIDER: system, openai (default: system)
+  - VOICE_STT_API_KEY: API key for cloud STT provider
 
 Required environment variables or flags:
   - AI_PROVIDER: AI provider (claude, deepseek, kimi) default: claude
@@ -63,6 +70,8 @@ func init() {
 	routerCmd.Flags().StringVar(&aiAPIKey, "api-key", "", "AI API Key (or AI_API_KEY env)")
 	routerCmd.Flags().StringVar(&aiBaseURL, "base-url", "", "Custom API base URL (or AI_BASE_URL env)")
 	routerCmd.Flags().StringVar(&aiModel, "model", "", "Model name (or AI_MODEL env)")
+	routerCmd.Flags().StringVar(&voiceSTTProvider, "voice-stt-provider", "", "Voice STT provider: system, openai (or VOICE_STT_PROVIDER env)")
+	routerCmd.Flags().StringVar(&voiceSTTAPIKey, "voice-stt-api-key", "", "Voice STT API key (or VOICE_STT_API_KEY env)")
 }
 
 func runRouter(cmd *cobra.Command, args []string) {
@@ -105,6 +114,15 @@ func runRouter(cmd *cobra.Command, args []string) {
 		aiModel = os.Getenv("AI_MODEL")
 		if aiModel == "" {
 			aiModel = os.Getenv("ANTHROPIC_MODEL")
+		}
+	}
+	if voiceSTTProvider == "" {
+		voiceSTTProvider = os.Getenv("VOICE_STT_PROVIDER")
+	}
+	if voiceSTTAPIKey == "" {
+		voiceSTTAPIKey = os.Getenv("VOICE_STT_API_KEY")
+		if voiceSTTAPIKey == "" && voiceSTTProvider == "openai" {
+			voiceSTTAPIKey = os.Getenv("OPENAI_API_KEY")
 		}
 	}
 
@@ -161,8 +179,24 @@ func runRouter(cmd *cobra.Command, args []string) {
 
 	// Register Telegram if token is provided
 	if telegramToken != "" {
+		// Create voice transcriber if STT provider is configured
+		var transcriber *voice.Transcriber
+		if voiceSTTProvider != "" {
+			var err error
+			transcriber, err = voice.NewTranscriber(voice.TranscriberConfig{
+				Provider: voiceSTTProvider,
+				APIKey:   voiceSTTAPIKey,
+			})
+			if err != nil {
+				log.Printf("Warning: Failed to create voice transcriber: %v", err)
+			} else {
+				log.Printf("Voice transcription enabled (provider: %s)", voiceSTTProvider)
+			}
+		}
+
 		telegramPlatform, err := telegram.New(telegram.Config{
-			Token: telegramToken,
+			Token:       telegramToken,
+			Transcriber: transcriber,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating Telegram platform: %v\n", err)

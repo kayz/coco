@@ -3,25 +3,34 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/pltanton/lingti-bot/internal/router"
 )
 
+// VoiceTranscriber transcribes voice messages to text
+type VoiceTranscriber interface {
+	Transcribe(ctx context.Context, audio []byte) (string, error)
+}
+
 // Platform implements router.Platform for Telegram
 type Platform struct {
 	bot            *tgbotapi.BotAPI
 	messageHandler func(msg router.Message)
+	transcriber    VoiceTranscriber
 	ctx            context.Context
 	cancel         context.CancelFunc
 }
 
 // Config holds Telegram configuration
 type Config struct {
-	Token string // Bot token from @BotFather
-	Debug bool   // Enable debug logging
+	Token       string           // Bot token from @BotFather
+	Debug       bool             // Enable debug logging
+	Transcriber VoiceTranscriber // Optional voice transcriber for voice messages
 }
 
 // New creates a new Telegram platform
@@ -38,7 +47,8 @@ func New(cfg Config) (*Platform, error) {
 	bot.Debug = cfg.Debug
 
 	return &Platform{
-		bot: bot,
+		bot:         bot,
+		transcriber: cfg.Transcriber,
 	}, nil
 }
 
@@ -120,12 +130,59 @@ func (p *Platform) handleUpdates(updates tgbotapi.UpdatesChannel) {
 				continue
 			}
 
-			text := p.cleanMention(update.Message.Text)
+			var text string
+			var isVoice bool
+
+			// Handle voice messages
+			if update.Message.Voice != nil {
+				if p.transcriber == nil {
+					log.Printf("[Telegram] Voice message received but no transcriber configured")
+					continue
+				}
+
+				// Transcribe voice message
+				transcribed, err := p.transcribeVoice(update.Message.Voice.FileID)
+				if err != nil {
+					log.Printf("[Telegram] Failed to transcribe voice: %v", err)
+					continue
+				}
+				text = transcribed
+				isVoice = true
+				log.Printf("[Telegram] Transcribed voice: %s", text)
+			} else if update.Message.Audio != nil {
+				// Handle audio files (sent as audio, not voice)
+				if p.transcriber == nil {
+					log.Printf("[Telegram] Audio message received but no transcriber configured")
+					continue
+				}
+
+				transcribed, err := p.transcribeVoice(update.Message.Audio.FileID)
+				if err != nil {
+					log.Printf("[Telegram] Failed to transcribe audio: %v", err)
+					continue
+				}
+				text = transcribed
+				isVoice = true
+				log.Printf("[Telegram] Transcribed audio: %s", text)
+			} else {
+				text = p.cleanMention(update.Message.Text)
+			}
+
+			if text == "" {
+				continue
+			}
 
 			if p.messageHandler != nil {
 				threadID := ""
 				if update.Message.ReplyToMessage != nil {
 					threadID = fmt.Sprintf("%d", update.Message.ReplyToMessage.MessageID)
+				}
+
+				metadata := map[string]string{
+					"chat_type": update.Message.Chat.Type,
+				}
+				if isVoice {
+					metadata["message_type"] = "voice"
 				}
 
 				p.messageHandler(router.Message{
@@ -136,13 +193,36 @@ func (p *Platform) handleUpdates(updates tgbotapi.UpdatesChannel) {
 					Username:  getUsername(update.Message.From),
 					Text:      text,
 					ThreadID:  threadID,
-					Metadata: map[string]string{
-						"chat_type": update.Message.Chat.Type,
-					},
+					Metadata:  metadata,
 				})
 			}
 		}
 	}
+}
+
+// transcribeVoice downloads and transcribes a voice message
+func (p *Platform) transcribeVoice(fileID string) (string, error) {
+	// Get file info from Telegram
+	file, err := p.bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
+	if err != nil {
+		return "", fmt.Errorf("failed to get file info: %w", err)
+	}
+
+	// Download the file
+	fileURL := file.Link(p.bot.Token)
+	resp, err := http.Get(fileURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to download file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	audio, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %w", err)
+	}
+
+	// Transcribe using the configured transcriber
+	return p.transcriber.Transcribe(p.ctx, audio)
 }
 
 // shouldRespond checks if the bot should respond to this message
