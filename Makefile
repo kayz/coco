@@ -8,14 +8,16 @@ GOOS ?= $(shell go env GOOS)
 LDFLAGS=-ldflags "-X github.com/pltanton/lingti-bot/internal/mcp.ServerVersion=$(VERSION) -X main.Build=$(BUILD) -w -s"
 GOBUILD=go build $(LDFLAGS)
 
-.PHONY: all build clean install uninstall test darwin-arm64 darwin-amd64 darwin-universal linux-amd64 linux-arm64 linux-all
+.PHONY: all build clean install uninstall test darwin-all darwin-arm64 darwin-amd64 darwin-universal linux-all linux-amd64 linux-arm64 windows-all windows-amd64 windows-arm64
 
 # Default: build for current platform
 build:
 	$(GOBUILD) -o $(GOBIN)/$(PROJECTNAME) .
 
 # Build all platforms
-all: darwin-arm64 darwin-amd64 linux-all
+all: darwin-all linux-all windows-all
+
+darwin-all: darwin-amd64 darwin-arm64
 
 # macOS builds
 darwin-amd64:
@@ -37,6 +39,15 @@ linux-arm64:
 	CGO_ENABLED=0 GOARCH=arm64 GOOS=linux $(GOBUILD) -o $(GOBIN)/$(PROJECTNAME)-$(VERSION)-linux-arm64 .
 
 linux-all: linux-amd64 linux-arm64
+
+# Windows builds
+windows-amd64:
+	CGO_ENABLED=0 GOARCH=amd64 GOOS=windows $(GOBUILD) -o $(GOBIN)/$(PROJECTNAME)-$(VERSION)-windows-amd64.exe .
+
+windows-arm64:
+	CGO_ENABLED=0 GOARCH=arm64 GOOS=windows $(GOBUILD) -o $(GOBIN)/$(PROJECTNAME)-$(VERSION)-windows-arm64.exe .
+
+windows-all: windows-amd64 windows-arm64
 
 # Code signing (macOS)
 codesign:
