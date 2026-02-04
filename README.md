@@ -33,6 +33,10 @@ curl -fsSL https://cli.lingti.com/install.sh | bash -s -- --bot
 
 - 飞书商店应用正在上架流程中，目前可通过自建应用实现绑定。教程请参考：[飞书集成指南](https://github.com/ruilisi/lingti-bot/blob/master/docs/feishu-integration.md)
 
+### 企业微信接入
+
+- 通过自建应用接入企业微信，需要公网服务器接收回调。教程请参考：[企业微信集成指南](docs/wecom-integration.md)
+
 ## Sponsors
 
 - **[灵缇游戏加速](https://game.lingti.com)** - PC/Mac/iOS/Android 全平台游戏加速、热点加速、AI 及学术资源定向加速，And More
@@ -175,7 +179,7 @@ curl -fsSL https://cli.lingti.com/install.sh | bash -s -- --bot
 | **Discord** | Gateway | ✅ 已支持 |
 | **云中继** | WebSocket | ✅ 已支持 |
 | **钉钉** | - | 🚧 开发中 |
-| **企业微信** | - | 🚧 开发中 |
+| **企业微信** | 回调 API | ✅ 已支持 |
 
 ### 一键接入
 
@@ -213,6 +217,7 @@ export FEISHU_APP_SECRET="..."
 - [命令行参考](docs/cli-reference.md) - 完整的命令行使用文档
 - [Slack 集成指南](docs/slack-integration.md) - 完整的 Slack 应用配置教程
 - [飞书集成指南](docs/feishu-integration.md) - 飞书/Lark 应用配置教程
+- [企业微信集成指南](docs/wecom-integration.md) - 企业微信应用配置教程
 
 ---
 

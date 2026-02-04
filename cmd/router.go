@@ -13,6 +13,7 @@ import (
 	"github.com/pltanton/lingti-bot/internal/platforms/feishu"
 	"github.com/pltanton/lingti-bot/internal/platforms/slack"
 	"github.com/pltanton/lingti-bot/internal/platforms/telegram"
+	"github.com/pltanton/lingti-bot/internal/platforms/wecom"
 	"github.com/pltanton/lingti-bot/internal/router"
 	"github.com/pltanton/lingti-bot/internal/voice"
 	"github.com/spf13/cobra"
@@ -25,6 +26,12 @@ var (
 	feishuAppSecret  string
 	telegramToken    string
 	discordToken     string
+	wecomCorpID      string
+	wecomAgentID     string
+	wecomSecret      string
+	wecomToken       string
+	wecomAESKey      string
+	wecomPort        int
 	aiProvider       string
 	aiAPIKey         string
 	aiBaseURL        string
@@ -44,6 +51,7 @@ Supported platforms:
   - Telegram: TELEGRAM_BOT_TOKEN (supports voice messages with VOICE_STT_PROVIDER)
   - Discord: DISCORD_BOT_TOKEN
   - Feishu: FEISHU_APP_ID + FEISHU_APP_SECRET
+  - WeCom: WECOM_CORP_ID + WECOM_AGENT_ID + WECOM_SECRET + WECOM_TOKEN + WECOM_AES_KEY
 
 Voice message transcription (optional):
   - VOICE_STT_PROVIDER: system, openai (default: system)
@@ -66,6 +74,12 @@ func init() {
 	routerCmd.Flags().StringVar(&feishuAppSecret, "feishu-app-secret", "", "Feishu App Secret (or FEISHU_APP_SECRET env)")
 	routerCmd.Flags().StringVar(&telegramToken, "telegram-token", "", "Telegram Bot Token (or TELEGRAM_BOT_TOKEN env)")
 	routerCmd.Flags().StringVar(&discordToken, "discord-token", "", "Discord Bot Token (or DISCORD_BOT_TOKEN env)")
+	routerCmd.Flags().StringVar(&wecomCorpID, "wecom-corp-id", "", "WeCom Corp ID (or WECOM_CORP_ID env)")
+	routerCmd.Flags().StringVar(&wecomAgentID, "wecom-agent-id", "", "WeCom Agent ID (or WECOM_AGENT_ID env)")
+	routerCmd.Flags().StringVar(&wecomSecret, "wecom-secret", "", "WeCom Secret (or WECOM_SECRET env)")
+	routerCmd.Flags().StringVar(&wecomToken, "wecom-token", "", "WeCom Callback Token (or WECOM_TOKEN env)")
+	routerCmd.Flags().StringVar(&wecomAESKey, "wecom-aes-key", "", "WeCom EncodingAESKey (or WECOM_AES_KEY env)")
+	routerCmd.Flags().IntVar(&wecomPort, "wecom-port", 0, "WeCom Callback Port (or WECOM_PORT env, default: 8080)")
 	routerCmd.Flags().StringVar(&aiProvider, "provider", "", "AI provider: claude or deepseek (or AI_PROVIDER env)")
 	routerCmd.Flags().StringVar(&aiAPIKey, "api-key", "", "AI API Key (or AI_API_KEY env)")
 	routerCmd.Flags().StringVar(&aiBaseURL, "base-url", "", "Custom API base URL (or AI_BASE_URL env)")
@@ -93,6 +107,26 @@ func runRouter(cmd *cobra.Command, args []string) {
 	}
 	if discordToken == "" {
 		discordToken = os.Getenv("DISCORD_BOT_TOKEN")
+	}
+	if wecomCorpID == "" {
+		wecomCorpID = os.Getenv("WECOM_CORP_ID")
+	}
+	if wecomAgentID == "" {
+		wecomAgentID = os.Getenv("WECOM_AGENT_ID")
+	}
+	if wecomSecret == "" {
+		wecomSecret = os.Getenv("WECOM_SECRET")
+	}
+	if wecomToken == "" {
+		wecomToken = os.Getenv("WECOM_TOKEN")
+	}
+	if wecomAESKey == "" {
+		wecomAESKey = os.Getenv("WECOM_AES_KEY")
+	}
+	if wecomPort == 0 {
+		if port := os.Getenv("WECOM_PORT"); port != "" {
+			fmt.Sscanf(port, "%d", &wecomPort)
+		}
 	}
 	if aiProvider == "" {
 		aiProvider = os.Getenv("AI_PROVIDER")
@@ -219,6 +253,25 @@ func runRouter(cmd *cobra.Command, args []string) {
 		r.Register(discordPlatform)
 	} else {
 		logger.Info("Discord token not provided, skipping Discord integration")
+	}
+
+	// Register WeCom if tokens are provided
+	if wecomCorpID != "" && wecomAgentID != "" && wecomSecret != "" && wecomToken != "" && wecomAESKey != "" {
+		wecomPlatform, err := wecom.New(wecom.Config{
+			CorpID:         wecomCorpID,
+			AgentID:        wecomAgentID,
+			Secret:         wecomSecret,
+			Token:          wecomToken,
+			EncodingAESKey: wecomAESKey,
+			CallbackPort:   wecomPort,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating WeCom platform: %v\n", err)
+			os.Exit(1)
+		}
+		r.Register(wecomPlatform)
+	} else {
+		logger.Info("WeCom tokens not provided, skipping WeCom integration")
 	}
 
 	// Start the router
