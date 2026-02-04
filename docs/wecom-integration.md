@@ -45,9 +45,39 @@ http://203.0.113.100:8080/wecom/callback
 
 > **注意**：企业微信支持 HTTP 回调，无需 HTTPS。如需 HTTPS，可配置反向代理（见下文）。
 
+## 部署方案对比
+
+| 方案 | 需要公网服务器 | 回调 URL |
+|------|---------------|---------|
+| 自建服务器 | 是 | `http://YOUR_IP:8080/wecom/callback` |
+| 云中继 | 否 | `https://bot.lingti.com/wecom` |
+
 ## 第二步：部署 lingti-bot
 
-### 方式一：直接部署（推荐）
+### 方式一：云中继模式（无需公网服务器）
+
+使用官方云中继服务，无需准备公网服务器：
+
+1. 在企业微信后台配置回调 URL：`https://bot.lingti.com/wecom`
+2. 本地运行 lingti-bot relay 连接云中继
+
+```bash
+# 1. 安装 lingti-bot
+curl -fsSL https://cli.lingti.com/install.sh | bash -s -- --bot
+
+# 2. 连接云中继
+lingti-bot relay \
+  --user-id YOUR_USER_ID \
+  --platform wecom \
+  --provider deepseek \
+  --model deepseek-chat \
+  --api-key YOUR_API_KEY \
+  --base-url "https://api.deepseek.com/v1"
+```
+
+> **获取 User ID**：在企业微信应用中发送 `/whoami` 获取你的用户 ID。
+
+### 方式二：自建服务器部署
 
 在公网服务器上直接运行 lingti-bot：
 

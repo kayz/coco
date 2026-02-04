@@ -43,7 +43,7 @@ User Flow:
 
 Required:
   --user-id     Your user ID from /whoami
-  --platform    Platform type: feishu, slack, or wechat
+  --platform    Platform type: feishu, slack, wechat, or wecom
   --api-key     AI API key (or AI_API_KEY env)
 
 Environment variables:
@@ -62,7 +62,7 @@ func init() {
 	rootCmd.AddCommand(relayCmd)
 
 	relayCmd.Flags().StringVar(&relayUserID, "user-id", "", "User ID from /whoami (required, or RELAY_USER_ID env)")
-	relayCmd.Flags().StringVar(&relayPlatform, "platform", "", "Platform: feishu, slack, or wechat (required, or RELAY_PLATFORM env)")
+	relayCmd.Flags().StringVar(&relayPlatform, "platform", "", "Platform: feishu, slack, wechat, or wecom (required, or RELAY_PLATFORM env)")
 	relayCmd.Flags().StringVar(&relayServerURL, "server", "", "WebSocket URL (default: wss://bot.lingti.com/ws, or RELAY_SERVER_URL env)")
 	relayCmd.Flags().StringVar(&relayWebhookURL, "webhook", "", "Webhook URL (default: https://bot.lingti.com/webhook, or RELAY_WEBHOOK_URL env)")
 	relayCmd.Flags().StringVar(&relayAIProvider, "provider", "", "AI provider: claude or deepseek (or AI_PROVIDER env)")
@@ -114,11 +114,11 @@ func runRelay(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 	if relayPlatform == "" {
-		fmt.Fprintln(os.Stderr, "Error: --platform is required (feishu, slack, or wechat)")
+		fmt.Fprintln(os.Stderr, "Error: --platform is required (feishu, slack, wechat, or wecom)")
 		os.Exit(1)
 	}
-	if relayPlatform != "feishu" && relayPlatform != "slack" && relayPlatform != "wechat" {
-		fmt.Fprintln(os.Stderr, "Error: --platform must be 'feishu', 'slack', or 'wechat'")
+	if relayPlatform != "feishu" && relayPlatform != "slack" && relayPlatform != "wechat" && relayPlatform != "wecom" {
+		fmt.Fprintln(os.Stderr, "Error: --platform must be 'feishu', 'slack', 'wechat', or 'wecom'")
 		os.Exit(1)
 	}
 	if relayAPIKey == "" {
