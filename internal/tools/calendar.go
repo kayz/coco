@@ -66,7 +66,7 @@ func CalendarCreateEvent(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		duration = int(d)
 	}
 
-	calendar := "Calendar"
+	calendar := ""
 	if c, ok := req.Params.Arguments["calendar"].(string); ok && c != "" {
 		calendar = c
 	}
@@ -88,18 +88,41 @@ func CalendarCreateEvent(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 
 	endTime := t.Add(time.Duration(duration) * time.Minute)
 
-	// macOS requires weekday in the date string
+	// Build AppleScript - use calendar 1 if no calendar specified
+	var calendarRef string
+	if calendar != "" {
+		calendarRef = fmt.Sprintf(`calendar "%s"`, escapeAppleScript(calendar))
+	} else {
+		calendarRef = "calendar 1"
+	}
+
+	// Use AppleScript date constructor instead of parsing date string (more reliable across locales)
 	script := fmt.Sprintf(`
 		tell application "Calendar"
-			tell calendar "%s"
-				make new event with properties {summary:"%s", start date:date "%s", end date:date "%s", location:"%s", description:"%s"}
+			set startDate to current date
+			set year of startDate to %d
+			set month of startDate to %d
+			set day of startDate to %d
+			set hours of startDate to %d
+			set minutes of startDate to %d
+			set seconds of startDate to 0
+
+			set endDate to current date
+			set year of endDate to %d
+			set month of endDate to %d
+			set day of endDate to %d
+			set hours of endDate to %d
+			set minutes of endDate to %d
+			set seconds of endDate to 0
+
+			tell %s
+				make new event with properties {summary:"%s", start date:startDate, end date:endDate, location:"%s", description:"%s"}
 			end tell
 		end tell
 		return "OK"
-	`, escapeAppleScript(calendar), escapeAppleScript(title),
-		t.Format("Monday, 2 January 2006 at 3:04:05 PM"),
-		endTime.Format("Monday, 2 January 2006 at 3:04:05 PM"),
-		escapeAppleScript(location), escapeAppleScript(notes))
+	`, t.Year(), int(t.Month()), t.Day(), t.Hour(), t.Minute(),
+		endTime.Year(), int(endTime.Month()), endTime.Day(), endTime.Hour(), endTime.Minute(),
+		calendarRef, escapeAppleScript(title), escapeAppleScript(location), escapeAppleScript(notes))
 
 	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
 	output, err := cmd.CombinedOutput()
