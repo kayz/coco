@@ -6,7 +6,6 @@
 
 1. 企业微信管理员账号
 2. 公网可访问的服务器（用于接收回调）
-3. HTTPS 域名（企业微信要求回调地址使用 HTTPS）
 
 ## 第一步：创建企业微信应用
 
@@ -31,42 +30,69 @@
 
 1. 在应用详情页，找到「接收消息」→「设置API接收」
 2. 填写回调配置：
-   - **URL**：`https://your-domain.com/wecom/callback`
+   - **URL**：回调地址（见下方说明）
    - **Token**：自定义字符串（32位以内，字母数字）
    - **EncodingAESKey**：点击「随机获取」或自定义（43位）
 3. 点击「保存」，企业微信会验证 URL 的有效性
 
-## 第二步：配置 lingti-bot
+**回调 URL 格式：**
 
-### 2.1 环境变量配置
+假设你的服务器公网 IP 为 `203.0.113.100`，`--wecom-port` 设置为 `8080`，则回调 URL 为：
+
+```
+http://203.0.113.100:8080/wecom/callback
+```
+
+> **注意**：企业微信支持 HTTP 回调，无需 HTTPS。如需 HTTPS，可配置反向代理（见下文）。
+
+## 第二步：部署 lingti-bot
+
+### 方式一：直接部署（推荐）
+
+在公网服务器上直接运行 lingti-bot：
+
+```bash
+# 1. 安装 lingti-bot
+curl -fsSL https://cli.lingti.com/install.sh | bash -s -- --bot
+
+# 2. 启动服务
+lingti-bot router \
+  --wecom-corp-id YOUR_CORP_ID \
+  --wecom-agent-id YOUR_AGENT_ID \
+  --wecom-secret YOUR_SECRET \
+  --wecom-token YOUR_TOKEN \
+  --wecom-aes-key YOUR_AES_KEY \
+  --wecom-port 8080 \
+  --model deepseek-chat \
+  --api-key YOUR_API_KEY \
+  --base-url "https://api.deepseek.com/v1"
+```
+
+然后在企业微信后台配置回调 URL：
+
+```
+http://YOUR_SERVER_IP:8080/wecom/callback
+```
+
+### 方式二：使用环境变量
 
 ```bash
 export WECOM_CORP_ID="your-corp-id"
 export WECOM_AGENT_ID="your-agent-id"
 export WECOM_SECRET="your-secret"
 export WECOM_TOKEN="your-callback-token"
-export WECOM_ENCODING_AES_KEY="your-encoding-aes-key"
+export WECOM_AES_KEY="your-encoding-aes-key"
+export WECOM_PORT="8080"
+export AI_API_KEY="your-api-key"
+export AI_BASE_URL="https://api.deepseek.com/v1"
+export AI_MODEL="deepseek-chat"
+
+lingti-bot router
 ```
 
-### 2.2 启动 lingti-bot
+### 方式三：使用 HTTPS（可选）
 
-```bash
-lingti-bot gateway \
-  --platform wecom \
-  --wecom-corp-id $WECOM_CORP_ID \
-  --wecom-agent-id $WECOM_AGENT_ID \
-  --wecom-secret $WECOM_SECRET \
-  --wecom-token $WECOM_TOKEN \
-  --wecom-aes-key $WECOM_ENCODING_AES_KEY \
-  --wecom-port 8080 \
-  --model deepseek-chat \
-  --api-key $DEEPSEEK_API_KEY \
-  --base-url "https://api.deepseek.com/v1"
-```
-
-### 2.3 配置反向代理（推荐）
-
-使用 Nginx 配置 HTTPS 反向代理：
+如需 HTTPS，使用 Nginx 配置反向代理：
 
 ```nginx
 server {
@@ -83,6 +109,8 @@ server {
     }
 }
 ```
+
+回调 URL 配置为：`https://your-domain.com/wecom/callback`
 
 ## 第三步：验证配置
 
@@ -103,20 +131,21 @@ lingti-bot 会自动处理验证请求，解密 echostr 并返回明文。
 3. 检查 lingti-bot 日志确认消息接收
 
 ```bash
-# 查看日志
-lingti-bot gateway --log verbose ...
+# 查看详细日志
+lingti-bot router --log verbose ...
 ```
 
 ## 架构说明
 
 ```
-┌──────────────┐     ┌─────────────────┐     ┌──────────────┐
-│  企业微信     │ ──▶ │  lingti-bot     │ ──▶ │   AI 模型    │
-│  用户消息     │     │  回调服务器      │     │  处理响应    │
-└──────────────┘     └─────────────────┘     └──────────────┘
-       ▲                     │
-       └─────────────────────┘
-           发送消息 API
+┌──────────────┐     ┌─────────────────────────────┐     ┌──────────────┐
+│  企业微信     │     │    公网服务器                │     │   AI 模型    │
+│  用户消息     │ ──▶ │  lingti-bot router          │ ──▶ │  处理响应    │
+│              │     │  http://IP:8080/wecom/callback │    │              │
+└──────────────┘     └─────────────────────────────┘     └──────────────┘
+       ▲                          │
+       └──────────────────────────┘
+              发送消息 API
 ```
 
 ### 消息流程
@@ -135,27 +164,76 @@ lingti-bot gateway --log verbose ...
 | `--wecom-agent-id` | `WECOM_AGENT_ID` | 应用 AgentId |
 | `--wecom-secret` | `WECOM_SECRET` | 应用 Secret |
 | `--wecom-token` | `WECOM_TOKEN` | 回调 Token |
-| `--wecom-aes-key` | `WECOM_ENCODING_AES_KEY` | 回调 EncodingAESKey |
+| `--wecom-aes-key` | `WECOM_AES_KEY` | 回调 EncodingAESKey |
 | `--wecom-port` | `WECOM_PORT` | 回调服务端口 (默认 8080) |
+
+## 后台运行
+
+### 使用 nohup
+
+```bash
+nohup lingti-bot router \
+  --wecom-corp-id ... \
+  --wecom-port 8080 \
+  ... > /var/log/lingti-bot.log 2>&1 &
+```
+
+### 使用 systemd
+
+创建 `/etc/systemd/system/lingti-bot.service`：
+
+```ini
+[Unit]
+Description=Lingti Bot WeCom Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Environment="WECOM_CORP_ID=your-corp-id"
+Environment="WECOM_AGENT_ID=your-agent-id"
+Environment="WECOM_SECRET=your-secret"
+Environment="WECOM_TOKEN=your-token"
+Environment="WECOM_AES_KEY=your-aes-key"
+Environment="WECOM_PORT=8080"
+Environment="AI_API_KEY=your-api-key"
+Environment="AI_BASE_URL=https://api.deepseek.com/v1"
+Environment="AI_MODEL=deepseek-chat"
+ExecStart=/usr/local/bin/lingti-bot router
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启动服务：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable lingti-bot
+sudo systemctl start lingti-bot
+sudo systemctl status lingti-bot
+```
 
 ## 常见问题
 
 ### Q: URL 验证失败？
 
-1. 确保服务器公网可访问
-2. 确保使用 HTTPS
-3. 检查 Token 和 EncodingAESKey 配置是否正确
-4. 查看 lingti-bot 日志排查错误
+1. 确保服务器公网可访问，防火墙开放端口
+2. 检查 Token 和 EncodingAESKey 配置是否正确（注意复制时不要有空格）
+3. 确保 lingti-bot 已启动并监听正确端口
+4. 查看日志：`lingti-bot router --log verbose`
 
 ### Q: 收不到消息？
 
 1. 检查应用的可见范围是否包含测试用户
 2. 确保回调 URL 配置正确
-3. 检查防火墙是否开放端口
+3. 检查防火墙是否开放端口：`sudo ufw allow 8080`
 
 ### Q: 发送消息失败？
 
-1. 检查 access_token 是否有效
+1. 检查 access_token 是否有效（查看日志）
 2. 确认 Secret 配置正确
 3. 确保 AgentId 正确
 
@@ -166,8 +244,8 @@ lingti-bot gateway --log verbose ...
 ## 安全建议
 
 1. **Token 保密**：不要将 Token 和 EncodingAESKey 提交到代码仓库
-2. **IP 白名单**：在企业微信后台配置 IP 白名单
-3. **HTTPS**：必须使用 HTTPS 保护回调通信
+2. **IP 白名单**：在企业微信后台配置可信 IP
+3. **防火墙**：仅开放必要端口
 4. **日志脱敏**：生产环境不要记录完整消息内容
 
 ## 相关文档
