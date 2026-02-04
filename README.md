@@ -138,6 +138,8 @@
 |------|------|------|
 | **Slack** | Socket Mode | ✅ 已支持 |
 | **飞书/Lark** | WebSocket | ✅ 已支持 |
+| **Telegram** | Bot API | ✅ 已支持 |
+| **Discord** | Gateway | ✅ 已支持 |
 | **云中继** | WebSocket | ✅ 已支持 |
 | **钉钉** | - | 🚧 开发中 |
 | **企业微信** | - | 🚧 开发中 |
@@ -378,6 +380,16 @@ AI：好的，我帮你创建了一个标题为"小明"的日程。
 
 ### 安装
 
+**方式一：一键安装（推荐）**
+
+```bash
+curl -fsSL https://cli.lingti.com/install.sh | bash -s -- --bot
+```
+
+自动检测系统架构，下载对应版本并安装到 `/usr/local/bin`。
+
+**方式二：从源码编译**
+
 ```bash
 # 克隆仓库
 git clone https://github.com/ruilisi/lingti-bot.git
@@ -391,6 +403,10 @@ make darwin-arm64  # Apple Silicon Mac
 make darwin-amd64  # Intel Mac
 make linux-amd64   # Linux x64
 ```
+
+**方式三：手动下载**
+
+前往 [GitHub Releases](https://github.com/ruilisi/lingti-bot/releases) 下载对应平台的二进制文件。
 
 ### 使用方式
 
