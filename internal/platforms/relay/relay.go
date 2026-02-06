@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/pltanton/lingti-bot/internal/debug"
+	"github.com/pltanton/lingti-bot/internal/platforms/wecom"
 	"github.com/pltanton/lingti-bot/internal/router"
 )
 
@@ -21,7 +24,6 @@ const (
 	DefaultWebhookURL = "https://bot.lingti.com/webhook"
 	ClientVersion     = "1.2.3"
 
-	pingInterval      = 15 * time.Second
 	writeTimeout      = 10 * time.Second
 	readTimeout       = 60 * time.Second
 	initialRetryDelay = 5 * time.Second
@@ -55,6 +57,8 @@ type Platform struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
+	// WeCom message cryptographer for local decryption
+	msgCrypt *wecom.MsgCrypt
 }
 
 // Protocol message types
@@ -117,6 +121,15 @@ type PingPong struct {
 	Type string `json:"type"`
 }
 
+// RawWeComMessage is received from server with raw encrypted WeCom XML
+type RawWeComMessage struct {
+	Type         string `json:"type"` // "wecom_raw"
+	MsgSignature string `json:"msg_signature"`
+	Timestamp    string `json:"timestamp"`
+	Nonce        string `json:"nonce"`
+	Body         string `json:"body"` // Raw XML body from WeCom
+}
+
 // New creates a new relay platform
 func New(cfg Config) (*Platform, error) {
 	if cfg.UserID == "" {
@@ -136,12 +149,24 @@ func New(cfg Config) (*Platform, error) {
 		cfg.WebhookURL = DefaultWebhookURL
 	}
 
-	return &Platform{
+	p := &Platform{
 		config: cfg,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-	}, nil
+	}
+
+	// Initialize MsgCrypt for WeCom platform (for local decryption)
+	if cfg.Platform == "wecom" && cfg.WeComToken != "" && cfg.WeComAESKey != "" {
+		msgCrypt, err := wecom.NewMsgCrypt(cfg.WeComToken, cfg.WeComAESKey, cfg.WeComCorpID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create WeCom message cryptographer: %w", err)
+		}
+		p.msgCrypt = msgCrypt
+		log.Printf("[Relay] WeCom local decryption enabled")
+	}
+
+	return p, nil
 }
 
 // Name returns the platform name
@@ -396,6 +421,9 @@ func (p *Platform) readLoop() {
 		case "message":
 			debug.Log("Received message, handling")
 			p.handleMessage(message)
+		case "wecom_raw":
+			debug.Log("Received raw WeCom message, decrypting locally")
+			p.handleRawWeComMessage(message)
 		case "error":
 			p.handleError(message)
 		default:
@@ -439,6 +467,74 @@ func (p *Platform) handleMessage(data []byte) {
 			Text:      msg.Text,
 			ThreadID:  msg.ThreadID,
 			Metadata:  metadata,
+		})
+	}
+}
+
+// handleRawWeComMessage decrypts and processes a raw WeCom message locally
+func (p *Platform) handleRawWeComMessage(data []byte) {
+	var rawMsg RawWeComMessage
+	if err := json.Unmarshal(data, &rawMsg); err != nil {
+		log.Printf("[Relay] Failed to parse raw WeCom message: %v", err)
+		return
+	}
+
+	if p.msgCrypt == nil {
+		log.Printf("[Relay] Cannot decrypt WeCom message: MsgCrypt not initialized")
+		return
+	}
+
+	// Parse the encrypted XML
+	var encryptedMsg wecom.EncryptedMsg
+	if err := xml.Unmarshal([]byte(rawMsg.Body), &encryptedMsg); err != nil {
+		log.Printf("[Relay] Failed to parse WeCom XML: %v", err)
+		return
+	}
+
+	// Decrypt the message locally
+	plaintext, err := p.msgCrypt.DecryptMsg(rawMsg.MsgSignature, rawMsg.Timestamp, rawMsg.Nonce, &encryptedMsg)
+	if err != nil {
+		log.Printf("[Relay] Failed to decrypt WeCom message: %v", err)
+		return
+	}
+
+	// Parse the decrypted message
+	var receivedMsg wecom.ReceivedMsg
+	if err := xml.Unmarshal(plaintext, &receivedMsg); err != nil {
+		log.Printf("[Relay] Failed to parse decrypted message: %v", err)
+		return
+	}
+
+	// Only handle text messages
+	if receivedMsg.MsgType != "text" {
+		log.Printf("[Relay] Ignoring WeCom message type: %s", receivedMsg.MsgType)
+		return
+	}
+
+	text := strings.TrimSpace(receivedMsg.Content)
+	if text == "" {
+		return
+	}
+
+	userID := receivedMsg.FromUserName
+	log.Printf("[Relay] Decrypted WeCom message: user_id=%s, msg_id=%s, agent_id=%s",
+		userID, receivedMsg.MsgId, receivedMsg.AgentID)
+	log.Printf("[Relay] Message content from %s: %s", userID, text)
+
+	if p.messageHandler != nil {
+		p.messageHandler(router.Message{
+			ID:        receivedMsg.MsgId,
+			Platform:  "relay",
+			ChannelID: userID, // Use UserID as channel for DM
+			UserID:    userID,
+			Username:  userID,
+			Text:      text,
+			Metadata: map[string]string{
+				"message_id": receivedMsg.MsgId,
+				"agent_id":   receivedMsg.AgentID,
+				"corp_id":    p.config.WeComCorpID,
+				"msg_type":   receivedMsg.MsgType,
+			},
 		})
 	}
 }
