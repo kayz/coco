@@ -9,6 +9,7 @@ require (
 	github.com/larksuite/oapi-sdk-go/v3 v3.5.3
 	github.com/liushuangls/go-anthropic/v2 v2.14.1
 	github.com/mark3labs/mcp-go v0.27.0
+	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/shirou/gopsutil/v4 v4.24.11
 	github.com/slack-go/slack v0.15.0

@@ -43,7 +43,7 @@ curl -fsSL https://cli.lingti.com/install.sh | bash -s -- --bot
 | **Slack** | Socket Mode | 一键接入 | ✅ |
 | **Telegram** | Bot API | 一键接入 | ✅ |
 | **Discord** | Gateway | 一键接入 | ✅ |
-| **钉钉** | - | 开发中 | 🚧 |
+| **钉钉** | Stream Mode | 一键接入 | ✅ |
 
 **云中继优势：** 无需公网服务器、无需域名备案、无需 HTTPS 证书、无需防火墙配置，5 分钟完成接入。
 
@@ -182,6 +182,25 @@ lingti-bot relay --platform wecom \
 
 详细教程请参考：[企业微信集成指南](docs/wecom-integration.md)
 
+### 钉钉接入
+
+使用 **Stream 模式**，无需公网服务器即可接入钉钉机器人：
+
+```bash
+# 一条命令搞定
+lingti-bot router \
+  --dingtalk-client-id YOUR_APP_KEY \
+  --dingtalk-client-secret YOUR_APP_SECRET \
+  --provider deepseek \
+  --api-key YOUR_API_KEY
+```
+
+**配置步骤：**
+1. 登录 [钉钉开放平台](https://open.dingtalk.com/)，创建企业内部应用
+2. 在应用详情页获取 AppKey (ClientID) 和 AppSecret (ClientSecret)
+3. 开启机器人功能，配置消息接收模式为 **Stream 模式**
+4. 运行上述命令即可
+
 ## Sponsors
 
 - **[灵缇游戏加速](https://game.lingti.com)** - PC/Mac/iOS/Android 全平台游戏加速、热点加速、AI 及学术资源定向加速，And More
@@ -317,7 +336,7 @@ lingti-bot relay --platform wecom \
 | **Telegram** | Bot API | ✅ 已支持 |
 | **Discord** | Gateway | ✅ 已支持 |
 | **云中继** | WebSocket | ✅ 已支持 |
-| **钉钉** | - | 🚧 开发中 |
+| **钉钉** | Stream Mode | ✅ 已支持 |
 | **企业微信** | 回调 API | ✅ 已支持 |
 
 ### 一键接入
@@ -851,6 +870,8 @@ make codesign       # 代码签名（需要开发者证书）
 | `SLACK_APP_TOKEN` | Slack App Token (`xapp-...`) | Slack 集成必需 |
 | `FEISHU_APP_ID` | 飞书 App ID | 飞书集成必需 |
 | `FEISHU_APP_SECRET` | 飞书 App Secret | 飞书集成必需 |
+| `DINGTALK_CLIENT_ID` | 钉钉 AppKey | 钉钉集成必需 |
+| `DINGTALK_CLIENT_SECRET` | 钉钉 AppSecret | 钉钉集成必需 |
 
 ---
 

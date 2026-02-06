@@ -9,6 +9,7 @@ import (
 
 	"github.com/pltanton/lingti-bot/internal/agent"
 	"github.com/pltanton/lingti-bot/internal/logger"
+	"github.com/pltanton/lingti-bot/internal/platforms/dingtalk"
 	"github.com/pltanton/lingti-bot/internal/platforms/discord"
 	"github.com/pltanton/lingti-bot/internal/platforms/feishu"
 	"github.com/pltanton/lingti-bot/internal/platforms/slack"
@@ -20,37 +21,40 @@ import (
 )
 
 var (
-	slackBotToken    string
-	slackAppToken    string
-	feishuAppID      string
-	feishuAppSecret  string
-	telegramToken    string
-	discordToken     string
-	wecomCorpID      string
-	wecomAgentID     string
-	wecomSecret      string
-	wecomToken       string
-	wecomAESKey      string
-	wecomPort        int
-	aiProvider       string
-	aiAPIKey         string
-	aiBaseURL        string
-	aiModel          string
-	voiceSTTProvider string
-	voiceSTTAPIKey   string
+	slackBotToken      string
+	slackAppToken      string
+	feishuAppID        string
+	feishuAppSecret    string
+	telegramToken      string
+	discordToken       string
+	wecomCorpID        string
+	wecomAgentID       string
+	wecomSecret        string
+	wecomToken         string
+	wecomAESKey        string
+	wecomPort          int
+	dingtalkClientID   string
+	dingtalkClientSecret string
+	aiProvider         string
+	aiAPIKey           string
+	aiBaseURL          string
+	aiModel            string
+	voiceSTTProvider   string
+	voiceSTTAPIKey     string
 )
 
 var routerCmd = &cobra.Command{
 	Use:   "router",
 	Short: "Start the message router",
 	Long: `Start the message router to receive messages from various platforms
-(Slack, Telegram, Discord, Feishu) and respond using AI.
+(Slack, Telegram, Discord, Feishu, DingTalk) and respond using AI.
 
 Supported platforms:
   - Slack: SLACK_BOT_TOKEN + SLACK_APP_TOKEN
   - Telegram: TELEGRAM_BOT_TOKEN (supports voice messages with VOICE_STT_PROVIDER)
   - Discord: DISCORD_BOT_TOKEN
   - Feishu: FEISHU_APP_ID + FEISHU_APP_SECRET
+  - DingTalk: DINGTALK_CLIENT_ID + DINGTALK_CLIENT_SECRET
   - WeCom: WECOM_CORP_ID + WECOM_AGENT_ID + WECOM_SECRET + WECOM_TOKEN + WECOM_AES_KEY
 
 Voice message transcription (optional):
@@ -80,6 +84,8 @@ func init() {
 	routerCmd.Flags().StringVar(&wecomToken, "wecom-token", "", "WeCom Callback Token (or WECOM_TOKEN env)")
 	routerCmd.Flags().StringVar(&wecomAESKey, "wecom-aes-key", "", "WeCom EncodingAESKey (or WECOM_AES_KEY env)")
 	routerCmd.Flags().IntVar(&wecomPort, "wecom-port", 0, "WeCom Callback Port (or WECOM_PORT env, default: 8080)")
+	routerCmd.Flags().StringVar(&dingtalkClientID, "dingtalk-client-id", "", "DingTalk AppKey (or DINGTALK_CLIENT_ID env)")
+	routerCmd.Flags().StringVar(&dingtalkClientSecret, "dingtalk-client-secret", "", "DingTalk AppSecret (or DINGTALK_CLIENT_SECRET env)")
 	routerCmd.Flags().StringVar(&aiProvider, "provider", "", "AI provider: claude or deepseek (or AI_PROVIDER env)")
 	routerCmd.Flags().StringVar(&aiAPIKey, "api-key", "", "AI API Key (or AI_API_KEY env)")
 	routerCmd.Flags().StringVar(&aiBaseURL, "base-url", "", "Custom API base URL (or AI_BASE_URL env)")
@@ -127,6 +133,12 @@ func runRouter(cmd *cobra.Command, args []string) {
 		if port := os.Getenv("WECOM_PORT"); port != "" {
 			fmt.Sscanf(port, "%d", &wecomPort)
 		}
+	}
+	if dingtalkClientID == "" {
+		dingtalkClientID = os.Getenv("DINGTALK_CLIENT_ID")
+	}
+	if dingtalkClientSecret == "" {
+		dingtalkClientSecret = os.Getenv("DINGTALK_CLIENT_SECRET")
 	}
 	if aiProvider == "" {
 		aiProvider = os.Getenv("AI_PROVIDER")
@@ -272,6 +284,21 @@ func runRouter(cmd *cobra.Command, args []string) {
 		r.Register(wecomPlatform)
 	} else {
 		logger.Info("WeCom tokens not provided, skipping WeCom integration")
+	}
+
+	// Register DingTalk if tokens are provided
+	if dingtalkClientID != "" && dingtalkClientSecret != "" {
+		dingtalkPlatform, err := dingtalk.New(dingtalk.Config{
+			ClientID:     dingtalkClientID,
+			ClientSecret: dingtalkClientSecret,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating DingTalk platform: %v\n", err)
+			os.Exit(1)
+		}
+		r.Register(dingtalkPlatform)
+	} else {
+		logger.Info("DingTalk tokens not provided, skipping DingTalk integration")
 	}
 
 	// Start the router
