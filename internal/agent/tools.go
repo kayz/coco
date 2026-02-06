@@ -3,13 +3,18 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/pltanton/lingti-bot/internal/logger"
+	"github.com/pltanton/lingti-bot/internal/router"
 	"github.com/pltanton/lingti-bot/internal/tools"
 )
 
@@ -52,6 +57,49 @@ func executeCalendarListEvents(ctx context.Context, days int) string {
 	}
 
 	return extractText(result)
+}
+
+// executeFileSend validates a file path and returns a FileAttachment for sending to the user.
+// It is handled specially in processToolCalls (not routed through callToolDirect).
+func executeFileSend(input json.RawMessage) (string, *router.FileAttachment) {
+	var args struct {
+		Path      string `json:"path"`
+		MediaType string `json:"media_type"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return fmt.Sprintf("Error parsing arguments: %v", err), nil
+	}
+	if args.Path == "" {
+		return "Error: path is required", nil
+	}
+
+	// Expand ~ to home directory
+	path := args.Path
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, path[2:])
+	}
+
+	// Verify file exists and is not a directory
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Sprintf("Error: file not found: %s", path), nil
+	}
+	if info.IsDir() {
+		return fmt.Sprintf("Error: %s is a directory, not a file", path), nil
+	}
+
+	mediaType := args.MediaType
+	if mediaType == "" {
+		mediaType = "file"
+	}
+
+	logger.Info("[Agent] file_send: queued %s (%s, %d bytes)", path, mediaType, info.Size())
+	return fmt.Sprintf("File queued for sending: %s (%d bytes)", filepath.Base(path), info.Size()), &router.FileAttachment{
+		Path:      path,
+		Name:      filepath.Base(path),
+		MediaType: mediaType,
+	}
 }
 
 // executeFileList runs the file_list tool
@@ -358,6 +406,118 @@ func executeWebFetch(ctx context.Context, url string) string {
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{"url": url}
 	result, err := tools.WebFetch(ctx, req)
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	return extractText(result)
+}
+
+// === BROWSER AUTOMATION ===
+
+func executeBrowserNavigate(ctx context.Context, url string) string {
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{"url": url}
+	result, err := tools.BrowserNavigate(ctx, req)
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	return extractText(result)
+}
+
+func executeBrowserSnapshot(ctx context.Context) string {
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{}
+	result, err := tools.BrowserSnapshot(ctx, req)
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	return extractText(result)
+}
+
+func executeBrowserClick(ctx context.Context, ref int) string {
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{"ref": float64(ref)}
+	result, err := tools.BrowserClick(ctx, req)
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	return extractText(result)
+}
+
+func executeBrowserType(ctx context.Context, ref int, text string, submit bool) string {
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{"ref": float64(ref), "text": text, "submit": submit}
+	result, err := tools.BrowserType(ctx, req)
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	return extractText(result)
+}
+
+func executeBrowserPress(ctx context.Context, key string) string {
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{"key": key}
+	result, err := tools.BrowserPress(ctx, req)
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	return extractText(result)
+}
+
+func executeBrowserScreenshot(ctx context.Context, args map[string]any) string {
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = args
+	result, err := tools.BrowserScreenshot(ctx, req)
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	return extractText(result)
+}
+
+func executeBrowserTabs(ctx context.Context) string {
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{}
+	result, err := tools.BrowserTabs(ctx, req)
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	return extractText(result)
+}
+
+func executeBrowserTabOpen(ctx context.Context, args map[string]any) string {
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = args
+	result, err := tools.BrowserTabOpen(ctx, req)
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	return extractText(result)
+}
+
+func executeBrowserTabClose(ctx context.Context, args map[string]any) string {
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = args
+	result, err := tools.BrowserTabClose(ctx, req)
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	return extractText(result)
+}
+
+func executeBrowserStatus(ctx context.Context) string {
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{}
+	result, err := tools.BrowserStatus(ctx, req)
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	return extractText(result)
+}
+
+func executeBrowserStop(ctx context.Context) string {
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{}
+	result, err := tools.BrowserStop(ctx, req)
 	if err != nil {
 		return "Error: " + err.Error()
 	}

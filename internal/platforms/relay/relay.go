@@ -59,6 +59,8 @@ type Platform struct {
 	wg             sync.WaitGroup
 	// WeCom message cryptographer for local decryption
 	msgCrypt *wecom.MsgCrypt
+	// WeCom platform for direct API calls (media upload/send)
+	wecomPlatform *wecom.Platform
 }
 
 // Protocol message types
@@ -166,6 +168,24 @@ func New(cfg Config) (*Platform, error) {
 		log.Printf("[Relay] WeCom local decryption enabled")
 	}
 
+	// Initialize WeCom platform for direct API calls (media upload/send)
+	if cfg.Platform == "wecom" && cfg.WeComCorpID != "" && cfg.WeComSecret != "" {
+		wp, err := wecom.New(wecom.Config{
+			CorpID:         cfg.WeComCorpID,
+			AgentID:        cfg.WeComAgentID,
+			Secret:         cfg.WeComSecret,
+			Token:          cfg.WeComToken,
+			EncodingAESKey: cfg.WeComAESKey,
+			CallbackPort:   -1, // API-only mode, no HTTP server
+		})
+		if err != nil {
+			log.Printf("[Relay] Warning: failed to create WeCom platform for media API: %v", err)
+		} else {
+			p.wecomPlatform = wp
+			log.Printf("[Relay] WeCom media API enabled")
+		}
+	}
+
 	return p, nil
 }
 
@@ -217,8 +237,47 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
-// Send sends a response via webhook
+// Send sends a response via webhook (text) and direct WeCom API (files)
 func (p *Platform) Send(ctx context.Context, channelID string, resp router.Response) error {
+	// Send text via webhook
+	if resp.Text != "" {
+		if err := p.sendWebhook(ctx, channelID, resp); err != nil {
+			return err
+		}
+	}
+
+	// Send file attachments directly via WeCom API
+	for _, file := range resp.Files {
+		if p.wecomPlatform == nil {
+			log.Printf("[Relay] Cannot send file: WeCom platform not initialized")
+			return fmt.Errorf("WeCom media API not available for file sending")
+		}
+
+		mediaType := file.MediaType
+		if mediaType == "" {
+			mediaType = "file"
+		}
+
+		log.Printf("[Relay] Uploading file: %s (type=%s)", file.Path, mediaType)
+		mediaID, err := p.wecomPlatform.UploadMedia(file.Path, mediaType)
+		if err != nil {
+			log.Printf("[Relay] Failed to upload %s: %v", file.Path, err)
+			return fmt.Errorf("failed to upload file %s: %w", file.Path, err)
+		}
+		log.Printf("[Relay] Upload complete, media_id=%s. Sending to %s", mediaID, channelID)
+
+		if err := p.wecomPlatform.SendMediaMessage(channelID, mediaID, mediaType); err != nil {
+			log.Printf("[Relay] Failed to send media message: %v", err)
+			return fmt.Errorf("failed to send file %s: %w", file.Path, err)
+		}
+		log.Printf("[Relay] File sent successfully: %s -> %s", file.Path, channelID)
+	}
+
+	return nil
+}
+
+// sendWebhook sends a text response via the relay webhook
+func (p *Platform) sendWebhook(ctx context.Context, channelID string, resp router.Response) error {
 	outgoing := OutgoingResponse{
 		Type:      "response",
 		MessageID: resp.Metadata["message_id"],
@@ -514,37 +573,60 @@ func (p *Platform) handleRawWeComMessage(data []byte) {
 		return
 	}
 
-	// Only handle text messages
-	if receivedMsg.MsgType != "text" {
-		log.Printf("[Relay] Ignoring WeCom message type: %s", receivedMsg.MsgType)
-		return
-	}
-
-	text := strings.TrimSpace(receivedMsg.Content)
-	if text == "" {
+	// Skip event messages
+	if receivedMsg.MsgType == "event" {
+		log.Printf("[Relay] Ignoring event: %s", receivedMsg.Event)
 		return
 	}
 
 	userID := receivedMsg.FromUserName
-	log.Printf("[Relay] Decrypted WeCom message: user_id=%s, msg_id=%s, agent_id=%s",
-		userID, receivedMsg.MsgId, receivedMsg.AgentID)
-	log.Printf("[Relay] Message content from %s: %s", userID, text)
+	routerMsg := router.Message{
+		ID:        receivedMsg.MsgId,
+		Platform:  "relay",
+		ChannelID: userID,
+		UserID:    userID,
+		Username:  userID,
+		Text:      strings.TrimSpace(receivedMsg.Content),
+		Metadata: map[string]string{
+			"message_id": receivedMsg.MsgId,
+			"agent_id":   receivedMsg.AgentID,
+			"corp_id":    p.config.WeComCorpID,
+			"msg_type":   receivedMsg.MsgType,
+		},
+	}
+
+	switch receivedMsg.MsgType {
+	case "text":
+		if routerMsg.Text == "" {
+			return
+		}
+	case "image":
+		routerMsg.MediaID = receivedMsg.MediaId
+		routerMsg.Text = "[图片]"
+		routerMsg.Metadata["pic_url"] = receivedMsg.PicUrl
+	case "voice":
+		routerMsg.MediaID = receivedMsg.MediaId
+		routerMsg.Text = "[语音]"
+		routerMsg.Metadata["format"] = receivedMsg.Format
+	case "video":
+		routerMsg.MediaID = receivedMsg.MediaId
+		routerMsg.Text = "[视频]"
+	case "file":
+		routerMsg.MediaID = receivedMsg.MediaId
+		routerMsg.FileName = receivedMsg.FileName
+		routerMsg.Text = "[文件] " + receivedMsg.FileName
+		routerMsg.Metadata["file_size"] = receivedMsg.FileSize
+	default:
+		log.Printf("[Relay] Ignoring WeCom message type: %s", receivedMsg.MsgType)
+		return
+	}
+
+	log.Printf("[Relay] Decrypted WeCom message: user_id=%s, msg_id=%s, agent_id=%s, type=%s",
+		userID, receivedMsg.MsgId, receivedMsg.AgentID, receivedMsg.MsgType)
+	log.Printf("[Relay] Message content from %s: %s", userID, routerMsg.Text)
 
 	if p.messageHandler != nil {
-		p.messageHandler(router.Message{
-			ID:        receivedMsg.MsgId,
-			Platform:  "relay",
-			ChannelID: userID, // Use UserID as channel for DM
-			UserID:    userID,
-			Username:  userID,
-			Text:      text,
-			Metadata: map[string]string{
-				"message_id": receivedMsg.MsgId,
-				"agent_id":   receivedMsg.AgentID,
-				"corp_id":    p.config.WeComCorpID,
-				"msg_type":   receivedMsg.MsgType,
-			},
-		})
+		p.messageHandler(routerMsg)
 	}
 }
 

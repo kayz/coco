@@ -16,12 +16,22 @@ type Message struct {
 	Username  string            // Human-readable username
 	Text      string            // Message content
 	ThreadID  string            // For threaded replies
+	MediaID   string            // Media file ID (for file/image/voice/video messages)
+	FileName  string            // Original filename (for file messages)
 	Metadata  map[string]string // Platform-specific metadata
+}
+
+// FileAttachment represents a file to upload and send
+type FileAttachment struct {
+	Path      string // Local file path to upload and send
+	Name      string // Display name (defaults to filepath.Base)
+	MediaType string // "file", "image", "voice", "video" (default: "file")
 }
 
 // Response represents a response to send back
 type Response struct {
 	Text     string
+	Files    []FileAttachment  // File attachments to send
 	ThreadID string            // Reply in thread if set
 	Metadata map[string]string // Platform-specific options
 }
@@ -89,7 +99,7 @@ func (r *Router) handleMessage(msg Message) {
 	platform, ok := r.platforms[msg.Platform]
 	r.mu.RUnlock()
 
-	if ok && resp.Text != "" {
+	if ok && (resp.Text != "" || len(resp.Files) > 0) {
 		if msg.ThreadID != "" {
 			resp.ThreadID = msg.ThreadID
 		}

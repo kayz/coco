@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -62,11 +63,6 @@ func New(cfg Config) (*Platform, error) {
 		return nil, fmt.Errorf("failed to create message cryptographer: %w", err)
 	}
 
-	port := cfg.CallbackPort
-	if port == 0 {
-		port = 8080
-	}
-
 	p := &Platform{
 		corpID:         cfg.CorpID,
 		agentID:        cfg.AgentID,
@@ -76,13 +72,18 @@ func New(cfg Config) (*Platform, error) {
 		msgCrypt:       msgCrypt,
 	}
 
-	// Set up HTTP server for callbacks
-	mux := http.NewServeMux()
-	mux.HandleFunc("/wecom/callback", p.handleCallback)
-
-	p.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: mux,
+	// Set up HTTP server for callbacks (skip if CallbackPort < 0, e.g. API-only mode)
+	if cfg.CallbackPort >= 0 {
+		port := cfg.CallbackPort
+		if port == 0 {
+			port = 8080
+		}
+		mux := http.NewServeMux()
+		mux.HandleFunc("/wecom/callback", p.handleCallback)
+		p.server = &http.Server{
+			Addr:    fmt.Sprintf(":%d", port),
+			Handler: mux,
+		}
 	}
 
 	return p, nil
@@ -110,13 +111,15 @@ func (p *Platform) Start(ctx context.Context) error {
 	// Start token refresh goroutine
 	go p.tokenRefreshLoop()
 
-	// Start HTTP server
-	go func() {
-		logger.Info("[WeCom] Starting callback server on %s", p.server.Addr)
-		if err := p.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("[WeCom] Server error: %v", err)
-		}
-	}()
+	// Start HTTP server (if configured)
+	if p.server != nil {
+		go func() {
+			logger.Info("[WeCom] Starting callback server on %s", p.server.Addr)
+			if err := p.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("[WeCom] Server error: %v", err)
+			}
+		}()
+	}
 
 	logger.Info("[WeCom] Connected with CorpID: %s, AgentID: %s", p.corpID, p.agentID)
 	return nil
@@ -137,17 +140,48 @@ func (p *Platform) Stop() error {
 
 // Send sends a message to a WeChat Work user
 func (p *Platform) Send(ctx context.Context, userID string, resp router.Response) error {
+	// Send text message if present
+	if resp.Text != "" {
+		if err := p.sendTextMessage(userID, resp.Text); err != nil {
+			return err
+		}
+	}
+
+	// Send file attachments
+	for _, file := range resp.Files {
+		mediaType := file.MediaType
+		if mediaType == "" {
+			mediaType = "file"
+		}
+
+		mediaID, err := p.UploadMedia(file.Path, mediaType)
+		if err != nil {
+			logger.Error("[WeCom] Failed to upload %s: %v", file.Path, err)
+			return fmt.Errorf("failed to upload file %s: %w", file.Path, err)
+		}
+
+		if err := p.SendMediaMessage(userID, mediaID, mediaType); err != nil {
+			return fmt.Errorf("failed to send file %s: %w", file.Path, err)
+		}
+	}
+
+	return nil
+}
+
+// sendTextMessage sends a text message to a user.
+func (p *Platform) sendTextMessage(userID string, text string) error {
 	token, err := p.getToken()
 	if err != nil {
 		return fmt.Errorf("failed to get access token: %w", err)
 	}
 
+	agentID, _ := strconv.Atoi(p.agentID)
 	msg := map[string]any{
 		"touser":  userID,
 		"msgtype": "text",
-		"agentid": p.agentID,
+		"agentid": agentID,
 		"text": map[string]string{
-			"content": resp.Text,
+			"content": text,
 		},
 	}
 
@@ -238,6 +272,12 @@ type ReceivedMsg struct {
 	Content      string   `xml:"Content"`
 	MsgId        string   `xml:"MsgId"`
 	AgentID      string   `xml:"AgentID"`
+	// Media fields
+	MediaId  string `xml:"MediaId"`
+	Format   string `xml:"Format"`   // Voice format (amr)
+	PicUrl   string `xml:"PicUrl"`   // Image thumbnail URL
+	FileName string `xml:"FileName"` // File name
+	FileSize string `xml:"FileSize"` // File size
 	// Event fields
 	Event    string `xml:"Event"`
 	EventKey string `xml:"EventKey"`
@@ -251,25 +291,51 @@ func (p *Platform) processMessage(plaintext []byte) {
 		return
 	}
 
-	// Only handle text messages for now
-	if msg.MsgType != "text" {
+	// Skip event messages
+	if msg.MsgType == "event" {
+		logger.Debug("[WeCom] Ignoring event: %s", msg.Event)
+		return
+	}
+
+	routerMsg := router.Message{
+		ID:        msg.MsgId,
+		Platform:  "wecom",
+		ChannelID: msg.FromUserName,
+		UserID:    msg.FromUserName,
+		Username:  msg.FromUserName,
+		Text:      msg.Content,
+		Metadata: map[string]string{
+			"agent_id": msg.AgentID,
+			"msg_type": msg.MsgType,
+		},
+	}
+
+	switch msg.MsgType {
+	case "text":
+		// Text is already set via msg.Content
+	case "image":
+		routerMsg.MediaID = msg.MediaId
+		routerMsg.Text = "[图片]"
+		routerMsg.Metadata["pic_url"] = msg.PicUrl
+	case "voice":
+		routerMsg.MediaID = msg.MediaId
+		routerMsg.Text = "[语音]"
+		routerMsg.Metadata["format"] = msg.Format
+	case "video":
+		routerMsg.MediaID = msg.MediaId
+		routerMsg.Text = "[视频]"
+	case "file":
+		routerMsg.MediaID = msg.MediaId
+		routerMsg.FileName = msg.FileName
+		routerMsg.Text = "[文件] " + msg.FileName
+		routerMsg.Metadata["file_size"] = msg.FileSize
+	default:
 		logger.Debug("[WeCom] Ignoring message type: %s", msg.MsgType)
 		return
 	}
 
 	if p.messageHandler != nil {
-		p.messageHandler(router.Message{
-			ID:        msg.MsgId,
-			Platform:  "wecom",
-			ChannelID: msg.FromUserName, // Use UserID as channel for DM
-			UserID:    msg.FromUserName,
-			Username:  msg.FromUserName, // WeChat Work doesn't provide username in callback
-			Text:      msg.Content,
-			Metadata: map[string]string{
-				"agent_id": msg.AgentID,
-				"msg_type": msg.MsgType,
-			},
-		})
+		p.messageHandler(routerMsg)
 	}
 }
 

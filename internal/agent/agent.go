@@ -145,7 +145,7 @@ func (a *Agent) handleBuiltinCommand(msg router.Message) (router.Response, bool)
 			Text: `可用工具:
 
 📁 文件操作:
-  file_list, file_read, file_trash, file_list_old
+  file_send, file_list, file_read, file_trash, file_list_old
 
 📅 日历 (macOS):
   calendar_today, calendar_list_events, calendar_create_event
@@ -260,6 +260,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 ## Available Tools
 
 ### File Operations
+- file_send: Send/transfer a file to the user via messaging platform
 - file_list: List directory contents (use ~/Desktop for desktop)
 - file_read: Read file contents
 - file_trash: Move files to trash (for delete operations)
@@ -310,6 +311,32 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 - music_volume: Set volume
 - music_search: Search and play
 
+### Browser Automation (snapshot-then-act pattern)
+- browser_navigate: Navigate to a URL (auto-starts browser)
+- browser_snapshot: Capture accessibility tree with numbered refs
+- browser_click: Click an element by ref number
+- browser_type: Type text into element by ref number (optional submit with Enter)
+- browser_press: Press keyboard key (Enter, Tab, Escape, etc.)
+- browser_screenshot: Take page screenshot
+- browser_tabs: List all open tabs
+- browser_tab_open: Open new tab
+- browser_tab_close: Close a tab
+- browser_status: Check browser state
+- browser_stop: Close browser
+
+## Browser Automation Rules
+You MUST follow the **snapshot-then-act** pattern for ALL browser interactions:
+1. **Navigate** to the target website's homepage using browser_navigate
+2. **Snapshot** the page using browser_snapshot to discover UI elements and their ref numbers
+3. **Interact** with elements step by step using browser_click / browser_type / browser_press
+4. **Re-snapshot** after any page change (click, navigation, form submit) to get updated refs
+
+**CRITICAL: NEVER construct or guess URLs to skip UI interaction steps.**
+- BAD: Directly navigating to https://www.xiaohongshu.com/search/关键词
+- GOOD: Navigate to https://www.xiaohongshu.com → snapshot → find search box → type keyword → submit
+
+Always simulate real user behavior: navigate to the base URL first, then use the page's UI elements (search boxes, buttons, menus) to accomplish the task step by step. Refs are invalidated after page changes — always re-snapshot.
+
 ## Important Rules
 1. **ALWAYS use tools** - Never tell users to do things manually
 2. **Be action-oriented** - Execute tasks, don't just describe them
@@ -333,9 +360,11 @@ Current date: %s%s`, time.Now().Format("2006-01-02"), runtime.GOOS, runtime.GOAR
 	}
 
 	// Handle tool use if needed
+	var pendingFiles []router.FileAttachment
 	for resp.FinishReason == "tool_use" {
 		// Process tool calls
-		toolResults := a.processToolCalls(ctx, resp.ToolCalls)
+		toolResults, files := a.processToolCalls(ctx, resp.ToolCalls)
+		pendingFiles = append(pendingFiles, files...)
 
 		// Add assistant response with tool calls
 		messages = append(messages, Message{
@@ -373,13 +402,25 @@ Current date: %s%s`, time.Now().Format("2006-01-02"), runtime.GOOS, runtime.GOAR
 	// Log response at verbose level
 	logger.Verbose("[Agent] Response: %s", resp.Content)
 
-	return router.Response{Text: resp.Content}, nil
+	return router.Response{Text: resp.Content, Files: pendingFiles}, nil
 }
 
 // buildToolsList creates the tools list for the AI provider
 func (a *Agent) buildToolsList() []Tool {
 	return []Tool{
 		// === FILE OPERATIONS ===
+		{
+			Name:        "file_send",
+			Description: "Send a file to the user via the messaging platform. Use this when the user asks you to send/transfer/share a file. Use ~ for home directory.",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path":       map[string]string{"type": "string", "description": "Path to the file (use ~ for home, e.g., ~/Desktop/report.pdf)"},
+					"media_type": map[string]string{"type": "string", "description": "Media type: file, image, voice, or video (default: file)"},
+				},
+				"required": []string{"path"},
+			}),
+		},
 		{
 			Name:        "file_read",
 			Description: "Read the contents of a file. Use ~ for home directory.",
@@ -814,14 +855,126 @@ func (a *Agent) buildToolsList() []Tool {
 			Description: "View current GitHub repository info",
 			InputSchema: jsonSchema(map[string]any{"type": "object", "properties": map[string]any{}}),
 		},
+
+		// === BROWSER AUTOMATION ===
+		{
+			Name:        "browser_navigate",
+			Description: "Navigate to a URL in the browser. Auto-starts headless browser if not running. Always navigate to the base site URL first, then use snapshot+click/type to interact with page elements step by step.",
+			InputSchema: jsonSchema(map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"url": map[string]string{"type": "string", "description": "URL to navigate to"}},
+				"required":   []string{"url"},
+			}),
+		},
+		{
+			Name:        "browser_snapshot",
+			Description: "Capture the page accessibility tree with numbered refs. Use these ref numbers with browser_click/browser_type to interact with elements. MUST re-run after any page change.",
+			InputSchema: jsonSchema(map[string]any{"type": "object", "properties": map[string]any{}}),
+		},
+		{
+			Name:        "browser_click",
+			Description: "Click an element by its ref number from browser_snapshot",
+			InputSchema: jsonSchema(map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"ref": map[string]string{"type": "number", "description": "Element ref number from browser_snapshot"}},
+				"required":   []string{"ref"},
+			}),
+		},
+		{
+			Name:        "browser_type",
+			Description: "Type text into an element by its ref number from browser_snapshot. Use submit=true to press Enter after typing.",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"ref":    map[string]string{"type": "number", "description": "Element ref number from browser_snapshot"},
+					"text":   map[string]string{"type": "string", "description": "Text to type"},
+					"submit": map[string]string{"type": "boolean", "description": "Press Enter after typing (default: false)"},
+				},
+				"required": []string{"ref", "text"},
+			}),
+		},
+		{
+			Name:        "browser_press",
+			Description: "Press a keyboard key (Enter, Tab, Escape, Backspace, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Space, Delete, Home, End, PageUp, PageDown)",
+			InputSchema: jsonSchema(map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"key": map[string]string{"type": "string", "description": "Key name to press"}},
+				"required":   []string{"key"},
+			}),
+		},
+		{
+			Name:        "browser_execute_js",
+			Description: "Execute JavaScript on the current page. Use to dismiss modals/overlays blocking interaction, extract data, or interact with elements not reachable via refs.",
+			InputSchema: jsonSchema(map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"script": map[string]string{"type": "string", "description": "JavaScript code to execute in page context"}},
+				"required":   []string{"script"},
+			}),
+		},
+		{
+			Name:        "browser_screenshot",
+			Description: "Take a screenshot of the current page",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path":      map[string]string{"type": "string", "description": "Output file path (default: ~/Desktop/browser_screenshot_<timestamp>.png)"},
+					"full_page": map[string]string{"type": "boolean", "description": "Capture full scrollable page (default: false)"},
+				},
+			}),
+		},
+		{
+			Name:        "browser_tabs",
+			Description: "List all open browser tabs with their target IDs and URLs",
+			InputSchema: jsonSchema(map[string]any{"type": "object", "properties": map[string]any{}}),
+		},
+		{
+			Name:        "browser_tab_open",
+			Description: "Open a new browser tab",
+			InputSchema: jsonSchema(map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"url": map[string]string{"type": "string", "description": "URL to open (default: about:blank)"}},
+			}),
+		},
+		{
+			Name:        "browser_tab_close",
+			Description: "Close a browser tab by target ID, or close the active tab if no ID given",
+			InputSchema: jsonSchema(map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"target_id": map[string]string{"type": "string", "description": "Target ID of the tab to close (from browser_tabs)"}},
+			}),
+		},
+		{
+			Name:        "browser_status",
+			Description: "Check if the browser is running and get current state",
+			InputSchema: jsonSchema(map[string]any{"type": "object", "properties": map[string]any{}}),
+		},
+		{
+			Name:        "browser_stop",
+			Description: "Close the browser",
+			InputSchema: jsonSchema(map[string]any{"type": "object", "properties": map[string]any{}}),
+		},
 	}
 }
 
-// processToolCalls executes tool calls and returns results
-func (a *Agent) processToolCalls(ctx context.Context, toolCalls []ToolCall) []ToolResult {
+// processToolCalls executes tool calls and returns results plus any file attachments
+func (a *Agent) processToolCalls(ctx context.Context, toolCalls []ToolCall) ([]ToolResult, []router.FileAttachment) {
 	results := make([]ToolResult, 0, len(toolCalls))
+	var files []router.FileAttachment
 
 	for _, tc := range toolCalls {
+		if tc.Name == "file_send" {
+			content, file := executeFileSend(tc.Input)
+			if file != nil {
+				files = append(files, *file)
+			}
+			results = append(results, ToolResult{
+				ToolCallID: tc.ID,
+				Content:    content,
+				IsError:    file == nil,
+			})
+			continue
+		}
+
 		result := a.executeTool(ctx, tc.Name, tc.Input)
 		results = append(results, ToolResult{
 			ToolCallID: tc.ID,
@@ -830,7 +983,7 @@ func (a *Agent) processToolCalls(ctx context.Context, toolCalls []ToolCall) []To
 		})
 	}
 
-	return results
+	return results, files
 }
 
 // executeTool runs a tool and returns the result
@@ -1048,6 +1201,60 @@ func callToolDirect(ctx context.Context, name string, args map[string]any) strin
 		return executeGitHubIssueCreate(ctx, args)
 	case "github_repo_view":
 		return executeGitHubRepoView(ctx)
+
+	// Browser automation
+	case "browser_navigate":
+		url := ""
+		if u, ok := args["url"].(string); ok {
+			url = u
+		}
+		return executeBrowserNavigate(ctx, url)
+	case "browser_snapshot":
+		return executeBrowserSnapshot(ctx)
+	case "browser_click":
+		ref := 0
+		if r, ok := args["ref"].(float64); ok {
+			ref = int(r)
+		}
+		return executeBrowserClick(ctx, ref)
+	case "browser_type":
+		ref := 0
+		text := ""
+		submit := false
+		if r, ok := args["ref"].(float64); ok {
+			ref = int(r)
+		}
+		if t, ok := args["text"].(string); ok {
+			text = t
+		}
+		if s, ok := args["submit"].(bool); ok {
+			submit = s
+		}
+		return executeBrowserType(ctx, ref, text, submit)
+	case "browser_press":
+		key := ""
+		if k, ok := args["key"].(string); ok {
+			key = k
+		}
+		return executeBrowserPress(ctx, key)
+	case "browser_execute_js":
+		script := ""
+		if s, ok := args["script"].(string); ok {
+			script = s
+		}
+		return executeBrowserExecuteJS(ctx, script)
+	case "browser_screenshot":
+		return executeBrowserScreenshot(ctx, args)
+	case "browser_tabs":
+		return executeBrowserTabs(ctx)
+	case "browser_tab_open":
+		return executeBrowserTabOpen(ctx, args)
+	case "browser_tab_close":
+		return executeBrowserTabClose(ctx, args)
+	case "browser_status":
+		return executeBrowserStatus(ctx)
+	case "browser_stop":
+		return executeBrowserStop(ctx)
 
 	default:
 		return fmt.Sprintf("Tool '%s' not implemented", name)
