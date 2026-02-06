@@ -246,7 +246,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 	thinkingPrompt := ThinkingPrompt(settings.ThinkingLevel)
 
 	// System prompt with actual paths
-	systemPrompt := fmt.Sprintf(`You are 灵提 (Lingti), a helpful AI assistant running on the user's computer.
+	systemPrompt := fmt.Sprintf(`You are 灵缇 (Lingti), a helpful AI assistant running on the user's computer.
 
 ## System Environment
 - Operating System: %s
