@@ -1,6 +1,6 @@
-# lingti-bot (灵小缇)
+# lingti-bot (灵小缇) 🐕⚡
 
-> 🚀 **[更适合中国宝宝体质](docs/为何更适合中国宝宝体质.md)的 AI Bot，让 AI Bot 接入更简单**
+> 🐕⚡ **极简至上 效率为王 一次编译 到处执行 极速接入**的 AI Bot
 
 [![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -19,7 +19,7 @@
 
 支持钉钉、飞书、企业微信、微信公众号、Slack、Telegram、Discord 等平台接入，既可通过**云中继 5 分钟秒接**，也可 [OpenClaw](docs/openclaw-reference.md) 式**传统自建部署**。查看 [开发路线图](docs/roadmap.md) 了解更多功能规划。
 
-> **为什么叫"灵小缇"？** 灵缇犬（Greyhound）是世界上跑得最快的犬，以敏捷、忠诚著称。灵小缇同样敏捷高效，是你忠实的 AI 助手。
+> 🐕⚡ **为什么叫"灵小缇"？** 灵缇犬（Greyhound）是世界上跑得最快的犬，以敏捷、忠诚著称。灵小缇同样敏捷高效，是你忠实的 AI 助手。
 
 ## 安装
 
