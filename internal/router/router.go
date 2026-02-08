@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/pltanton/lingti-bot/internal/logger"
@@ -92,7 +93,7 @@ func (r *Router) handleMessage(msg Message) {
 	resp, err := r.handler(ctx, msg)
 	if err != nil {
 		logger.Error("[Router] Error handling message: %v", err)
-		resp = Response{Text: "Sorry, I encountered an error processing your request."}
+		resp = Response{Text: friendlyError(err)}
 	}
 
 	// Send response back to the platform
@@ -159,5 +160,20 @@ func (r *Router) Stop() error {
 func (r *Router) Wait() {
 	if r.ctx != nil {
 		<-r.ctx.Done()
+	}
+}
+
+// friendlyError converts AI provider errors into user-facing messages with actionable links.
+func friendlyError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "overdue-payment") || strings.Contains(msg, "account is in good standing"):
+		return "AI 服务账户欠费，请前往充值: https://usercenter2.aliyun.com/finance/fund-management"
+	case strings.Contains(msg, "invalid_api_key") || strings.Contains(msg, "Incorrect API key"):
+		return "AI API Key 无效，请检查配置。"
+	case strings.Contains(msg, "rate_limit") || strings.Contains(msg, "Rate limit"):
+		return "AI 请求频率超限，请稍后再试。"
+	default:
+		return fmt.Sprintf("处理消息时出错: %v", err)
 	}
 }
