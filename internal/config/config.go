@@ -16,6 +16,18 @@ type Config struct {
 	AI        AIConfig        `yaml:"ai,omitempty"`
 	Platforms PlatformConfig  `yaml:"platforms,omitempty"`
 	Mode      string          `yaml:"mode,omitempty"` // "relay" or "router"
+	Skills    SkillsConfig    `yaml:"skills,omitempty"`
+}
+
+type SkillsConfig struct {
+	Disabled  []string `yaml:"disabled,omitempty"`
+	ExtraDirs []string `yaml:"extra_dirs,omitempty"`
+}
+
+// SkillsDir returns the managed skills directory path
+func SkillsDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".lingti", "skills")
 }
 
 type AIConfig struct {
