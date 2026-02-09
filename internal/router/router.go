@@ -173,6 +173,10 @@ func friendlyError(err error) string {
 		return "AI API Key 无效，请检查配置。"
 	case strings.Contains(msg, "rate_limit") || strings.Contains(msg, "Rate limit"):
 		return "AI 请求频率超限，请稍后再试。"
+	case strings.Contains(msg, "only authorized for use with Claude Code"):
+		return "Claude Setup Token 仅限 Claude Code 使用，请改用 API Key (console.anthropic.com)。"
+	case strings.Contains(msg, "unexpected EOF") || msg == "EOF" || strings.Contains(msg, "connection reset"):
+		return "AI 服务连接中断，请稍后重试。"
 	default:
 		return fmt.Sprintf("处理消息时出错: %v", err)
 	}
