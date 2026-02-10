@@ -74,6 +74,9 @@ var (
 	onboardTwitchToken   string
 	onboardTwitchChannel string
 	onboardTwitchBotName string
+	// NOSTR
+	onboardNOSTRPrivateKey string
+	onboardNOSTRRelays     string
 )
 
 var onboardCmd = &cobra.Command{
@@ -157,6 +160,9 @@ func init() {
 	onboardCmd.Flags().StringVar(&onboardTwitchToken, "twitch-token", "", "Twitch OAuth Token")
 	onboardCmd.Flags().StringVar(&onboardTwitchChannel, "twitch-channel", "", "Twitch Channel")
 	onboardCmd.Flags().StringVar(&onboardTwitchBotName, "twitch-bot-name", "", "Twitch Bot Name")
+	// NOSTR
+	onboardCmd.Flags().StringVar(&onboardNOSTRPrivateKey, "nostr-private-key", "", "NOSTR Private Key")
+	onboardCmd.Flags().StringVar(&onboardNOSTRRelays, "nostr-relays", "", "NOSTR Relay URLs (comma-separated)")
 }
 
 var scanner *bufio.Scanner
@@ -385,6 +391,13 @@ func applyOnboardFlags(cfg *config.Config) {
 		if onboardTwitchBotName != "" {
 			cfg.Platforms.Twitch.BotName = onboardTwitchBotName
 		}
+	case "nostr":
+		if onboardNOSTRPrivateKey != "" {
+			cfg.Platforms.NOSTR.PrivateKey = onboardNOSTRPrivateKey
+		}
+		if onboardNOSTRRelays != "" {
+			cfg.Platforms.NOSTR.Relays = onboardNOSTRRelays
+		}
 	}
 }
 
@@ -588,6 +601,7 @@ var platformOptions = []platformInfo{
 	{"imessage", "imessage  (iMessage/BlueBubbles)"},
 	{"signal", "signal    (Signal)"},
 	{"twitch", "twitch    (Twitch)"},
+	{"nostr", "nostr     (NOSTR)"},
 	{"skip", "skip      (configure later)"},
 }
 
@@ -635,6 +649,8 @@ func stepPlatform(cfg *config.Config) {
 		stepSignal(cfg)
 	case "twitch":
 		stepTwitch(cfg)
+	case "nostr":
+		stepNOSTR(cfg)
 	case "skip":
 		fmt.Println("\n  > Platform configuration skipped")
 	}
@@ -750,6 +766,13 @@ func stepTwitch(cfg *config.Config) {
 	cfg.Platforms.Twitch.Channel = promptText("Twitch Channel", cfg.Platforms.Twitch.Channel)
 	cfg.Platforms.Twitch.BotName = promptText("Twitch Bot Name", cfg.Platforms.Twitch.BotName)
 	fmt.Println("\n  > Twitch configured")
+}
+
+func stepNOSTR(cfg *config.Config) {
+	fmt.Println()
+	cfg.Platforms.NOSTR.PrivateKey = promptText("NOSTR Private Key (hex or nsec)", cfg.Platforms.NOSTR.PrivateKey)
+	cfg.Platforms.NOSTR.Relays = promptText("NOSTR Relay URLs (comma-separated)", cfg.Platforms.NOSTR.Relays)
+	fmt.Println("\n  > NOSTR configured")
 }
 
 func stepWeChat(cfg *config.Config) {

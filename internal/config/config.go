@@ -59,6 +59,7 @@ type PlatformConfig struct {
 	IMessage   IMessageConfig   `yaml:"imessage,omitempty"`
 	Signal     SignalConfig     `yaml:"signal,omitempty"`
 	Twitch     TwitchConfig     `yaml:"twitch,omitempty"`
+	NOSTR      NOSTRConfig      `yaml:"nostr,omitempty"`
 }
 
 type WeComConfig struct {
@@ -141,6 +142,11 @@ type TwitchConfig struct {
 	Token   string `yaml:"token,omitempty"`
 	Channel string `yaml:"channel,omitempty"`
 	BotName string `yaml:"bot_name,omitempty"`
+}
+
+type NOSTRConfig struct {
+	PrivateKey string `yaml:"private_key,omitempty"`
+	Relays     string `yaml:"relays,omitempty"`
 }
 
 type SecurityConfig struct {

@@ -22,6 +22,7 @@ import (
 	"github.com/pltanton/lingti-bot/internal/platforms/wecom"
 	"github.com/pltanton/lingti-bot/internal/platforms/line"
 	"github.com/pltanton/lingti-bot/internal/platforms/mattermost"
+	"github.com/pltanton/lingti-bot/internal/platforms/nostr"
 	signalplatform "github.com/pltanton/lingti-bot/internal/platforms/signal"
 	"github.com/pltanton/lingti-bot/internal/platforms/twitch"
 	"github.com/pltanton/lingti-bot/internal/platforms/matrix"
@@ -67,6 +68,8 @@ var (
 	twitchToken          string
 	twitchChannel        string
 	twitchBotName        string
+	nostrPrivateKey      string
+	nostrRelays          string
 	whatsappPhoneID      string
 	whatsappAccessToken  string
 	whatsappVerifyToken  string
@@ -142,6 +145,8 @@ func init() {
 	routerCmd.Flags().StringVar(&twitchToken, "twitch-token", "", "Twitch OAuth Token (or TWITCH_TOKEN env)")
 	routerCmd.Flags().StringVar(&twitchChannel, "twitch-channel", "", "Twitch Channel (or TWITCH_CHANNEL env)")
 	routerCmd.Flags().StringVar(&twitchBotName, "twitch-bot-name", "", "Twitch Bot Name (or TWITCH_BOT_NAME env)")
+	routerCmd.Flags().StringVar(&nostrPrivateKey, "nostr-private-key", "", "NOSTR Private Key (or NOSTR_PRIVATE_KEY env)")
+	routerCmd.Flags().StringVar(&nostrRelays, "nostr-relays", "", "NOSTR Relay URLs (or NOSTR_RELAYS env)")
 	routerCmd.Flags().StringVar(&whatsappPhoneID, "whatsapp-phone-id", "", "WhatsApp Phone Number ID (or WHATSAPP_PHONE_NUMBER_ID env)")
 	routerCmd.Flags().StringVar(&whatsappAccessToken, "whatsapp-access-token", "", "WhatsApp Access Token (or WHATSAPP_ACCESS_TOKEN env)")
 	routerCmd.Flags().StringVar(&whatsappVerifyToken, "whatsapp-verify-token", "", "WhatsApp Verify Token (or WHATSAPP_VERIFY_TOKEN env)")
@@ -199,6 +204,12 @@ func runRouter(cmd *cobra.Command, args []string) {
 	}
 	if dingtalkClientSecret == "" {
 		dingtalkClientSecret = os.Getenv("DINGTALK_CLIENT_SECRET")
+	}
+	if nostrPrivateKey == "" {
+		nostrPrivateKey = os.Getenv("NOSTR_PRIVATE_KEY")
+	}
+	if nostrRelays == "" {
+		nostrRelays = os.Getenv("NOSTR_RELAYS")
 	}
 	if twitchToken == "" {
 		twitchToken = os.Getenv("TWITCH_TOKEN")
@@ -359,6 +370,12 @@ func runRouter(cmd *cobra.Command, args []string) {
 		}
 		if dingtalkClientSecret == "" {
 			dingtalkClientSecret = savedCfg.Platforms.DingTalk.ClientSecret
+		}
+		if nostrPrivateKey == "" {
+			nostrPrivateKey = savedCfg.Platforms.NOSTR.PrivateKey
+		}
+		if nostrRelays == "" {
+			nostrRelays = savedCfg.Platforms.NOSTR.Relays
 		}
 		if twitchToken == "" {
 			twitchToken = savedCfg.Platforms.Twitch.Token
@@ -580,6 +597,21 @@ func runRouter(cmd *cobra.Command, args []string) {
 		r.Register(dingtalkPlatform)
 	} else {
 		logger.Info("DingTalk tokens not provided, skipping DingTalk integration")
+	}
+
+	// Register NOSTR if tokens are provided
+	if nostrPrivateKey != "" && nostrRelays != "" {
+		nostrPlatform, err := nostr.New(nostr.Config{
+			PrivateKey: nostrPrivateKey,
+			Relays:     nostrRelays,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating NOSTR platform: %v\n", err)
+			os.Exit(1)
+		}
+		r.Register(nostrPlatform)
+	} else {
+		logger.Info("NOSTR tokens not provided, skipping NOSTR integration")
 	}
 
 	// Register Twitch if tokens are provided
