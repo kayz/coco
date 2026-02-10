@@ -21,7 +21,8 @@ type Agent struct {
 	sessions      *SessionStore
 	autoApprove   bool
 	cronScheduler *cronpkg.Scheduler
-	currentMsg    router.Message // set during HandleMessage for cron_create context
+	currentMsg       router.Message // set during HandleMessage for cron_create context
+	cronCreatedCount int            // tracks cron_create calls per HandleMessage turn
 }
 
 // Config holds agent configuration
@@ -305,6 +306,7 @@ func (a *Agent) ExecutePrompt(ctx context.Context, platform, channelID, userID, 
 // HandleMessage processes a message and returns a response
 func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.Response, error) {
 	a.currentMsg = msg
+	a.cronCreatedCount = 0
 	logger.Info("[Agent] Processing message from %s: %s (provider: %s)", msg.Username, msg.Text, a.provider.Name())
 
 	// Handle built-in commands

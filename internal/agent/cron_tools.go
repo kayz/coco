@@ -12,6 +12,12 @@ func (a *Agent) executeCronCreate(args map[string]any) string {
 		return "Error: cron scheduler not available"
 	}
 
+	// Enforce: only ONE cron_create per user request
+	a.cronCreatedCount++
+	if a.cronCreatedCount > 1 {
+		return "Error: You already created a cron job for this request. Only ONE cron job per user request is allowed. If you need varied/random content each time, use the 'prompt' parameter instead of creating multiple 'message' jobs."
+	}
+
 	name, _ := args["name"].(string)
 	schedule, _ := args["schedule"].(string)
 	message, _ := args["message"].(string)
