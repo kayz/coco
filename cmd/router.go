@@ -19,6 +19,7 @@ import (
 	"github.com/pltanton/lingti-bot/internal/platforms/telegram"
 	"github.com/pltanton/lingti-bot/internal/platforms/wecom"
 	"github.com/pltanton/lingti-bot/internal/platforms/line"
+	"github.com/pltanton/lingti-bot/internal/platforms/teams"
 	"github.com/pltanton/lingti-bot/internal/platforms/whatsapp"
 	"github.com/pltanton/lingti-bot/internal/router"
 	"github.com/pltanton/lingti-bot/internal/voice"
@@ -42,6 +43,9 @@ var (
 	dingtalkClientSecret string
 	lineChannelSecret    string
 	lineChannelToken     string
+	teamsAppID           string
+	teamsAppPassword     string
+	teamsTenantID        string
 	whatsappPhoneID      string
 	whatsappAccessToken  string
 	whatsappVerifyToken  string
@@ -99,6 +103,9 @@ func init() {
 	routerCmd.Flags().StringVar(&dingtalkClientSecret, "dingtalk-client-secret", "", "DingTalk AppSecret (or DINGTALK_CLIENT_SECRET env)")
 	routerCmd.Flags().StringVar(&lineChannelSecret, "line-channel-secret", "", "LINE Channel Secret (or LINE_CHANNEL_SECRET env)")
 	routerCmd.Flags().StringVar(&lineChannelToken, "line-channel-token", "", "LINE Channel Token (or LINE_CHANNEL_TOKEN env)")
+	routerCmd.Flags().StringVar(&teamsAppID, "teams-app-id", "", "Teams App ID (or TEAMS_APP_ID env)")
+	routerCmd.Flags().StringVar(&teamsAppPassword, "teams-app-password", "", "Teams App Password (or TEAMS_APP_PASSWORD env)")
+	routerCmd.Flags().StringVar(&teamsTenantID, "teams-tenant-id", "", "Teams Tenant ID (or TEAMS_TENANT_ID env)")
 	routerCmd.Flags().StringVar(&whatsappPhoneID, "whatsapp-phone-id", "", "WhatsApp Phone Number ID (or WHATSAPP_PHONE_NUMBER_ID env)")
 	routerCmd.Flags().StringVar(&whatsappAccessToken, "whatsapp-access-token", "", "WhatsApp Access Token (or WHATSAPP_ACCESS_TOKEN env)")
 	routerCmd.Flags().StringVar(&whatsappVerifyToken, "whatsapp-verify-token", "", "WhatsApp Verify Token (or WHATSAPP_VERIFY_TOKEN env)")
@@ -156,6 +163,15 @@ func runRouter(cmd *cobra.Command, args []string) {
 	}
 	if dingtalkClientSecret == "" {
 		dingtalkClientSecret = os.Getenv("DINGTALK_CLIENT_SECRET")
+	}
+	if teamsAppID == "" {
+		teamsAppID = os.Getenv("TEAMS_APP_ID")
+	}
+	if teamsAppPassword == "" {
+		teamsAppPassword = os.Getenv("TEAMS_APP_PASSWORD")
+	}
+	if teamsTenantID == "" {
+		teamsTenantID = os.Getenv("TEAMS_TENANT_ID")
 	}
 	if lineChannelSecret == "" {
 		lineChannelSecret = os.Getenv("LINE_CHANNEL_SECRET")
@@ -262,6 +278,15 @@ func runRouter(cmd *cobra.Command, args []string) {
 		}
 		if dingtalkClientSecret == "" {
 			dingtalkClientSecret = savedCfg.Platforms.DingTalk.ClientSecret
+		}
+		if teamsAppID == "" {
+			teamsAppID = savedCfg.Platforms.Teams.AppID
+		}
+		if teamsAppPassword == "" {
+			teamsAppPassword = savedCfg.Platforms.Teams.AppPassword
+		}
+		if teamsTenantID == "" {
+			teamsTenantID = savedCfg.Platforms.Teams.TenantID
 		}
 		if lineChannelSecret == "" {
 			lineChannelSecret = savedCfg.Platforms.LINE.ChannelSecret
@@ -431,7 +456,23 @@ func runRouter(cmd *cobra.Command, args []string) {
 		logger.Info("DingTalk tokens not provided, skipping DingTalk integration")
 	}
 
-// Register LINE if tokens are provided
+	// Register Teams if tokens are provided
+	if teamsAppID != "" && teamsAppPassword != "" {
+		teamsPlatform, err := teams.New(teams.Config{
+			AppID:       teamsAppID,
+			AppPassword: teamsAppPassword,
+			TenantID:    teamsTenantID,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating Teams platform: %v\n", err)
+			os.Exit(1)
+		}
+		r.Register(teamsPlatform)
+	} else {
+		logger.Info("Teams tokens not provided, skipping Teams integration")
+	}
+
+	// Register LINE if tokens are provided
 	if lineChannelSecret != "" && lineChannelToken != "" {
 		linePlatform, err := line.New(line.Config{
 			ChannelSecret: lineChannelSecret,

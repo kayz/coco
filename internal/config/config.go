@@ -52,6 +52,7 @@ type PlatformConfig struct {
 	DingTalk DingTalkConfig `yaml:"dingtalk,omitempty"`
 	WhatsApp WhatsAppConfig `yaml:"whatsapp,omitempty"`
 	LINE     LINEConfig     `yaml:"line,omitempty"`
+	Teams    TeamsConfig    `yaml:"teams,omitempty"`
 }
 
 type WeComConfig struct {
@@ -95,6 +96,12 @@ type WhatsAppConfig struct {
 type LINEConfig struct {
 	ChannelSecret string `yaml:"channel_secret,omitempty"`
 	ChannelToken  string `yaml:"channel_token,omitempty"`
+}
+
+type TeamsConfig struct {
+	AppID       string `yaml:"app_id,omitempty"`
+	AppPassword string `yaml:"app_password,omitempty"`
+	TenantID    string `yaml:"tenant_id,omitempty"`
 }
 
 type SecurityConfig struct {

@@ -49,6 +49,10 @@ var (
 	// LINE
 	onboardLINEChannelSecret string
 	onboardLINEChannelToken  string
+	// Teams
+	onboardTeamsAppID       string
+	onboardTeamsAppPassword string
+	onboardTeamsTenantID    string
 )
 
 var onboardCmd = &cobra.Command{
@@ -107,6 +111,10 @@ func init() {
 	// LINE
 	onboardCmd.Flags().StringVar(&onboardLINEChannelSecret, "line-channel-secret", "", "LINE Channel Secret")
 	onboardCmd.Flags().StringVar(&onboardLINEChannelToken, "line-channel-token", "", "LINE Channel Token")
+	// Teams
+	onboardCmd.Flags().StringVar(&onboardTeamsAppID, "teams-app-id", "", "Teams App ID")
+	onboardCmd.Flags().StringVar(&onboardTeamsAppPassword, "teams-app-password", "", "Teams App Password")
+	onboardCmd.Flags().StringVar(&onboardTeamsTenantID, "teams-tenant-id", "", "Teams Tenant ID")
 }
 
 var scanner *bufio.Scanner
@@ -273,6 +281,16 @@ func applyOnboardFlags(cfg *config.Config) {
 		}
 		if onboardLINEChannelToken != "" {
 			cfg.Platforms.LINE.ChannelToken = onboardLINEChannelToken
+		}
+	case "teams":
+		if onboardTeamsAppID != "" {
+			cfg.Platforms.Teams.AppID = onboardTeamsAppID
+		}
+		if onboardTeamsAppPassword != "" {
+			cfg.Platforms.Teams.AppPassword = onboardTeamsAppPassword
+		}
+		if onboardTeamsTenantID != "" {
+			cfg.Platforms.Teams.TenantID = onboardTeamsTenantID
 		}
 	}
 }
@@ -470,6 +488,7 @@ var platformOptions = []platformInfo{
 	{"discord", "discord"},
 	{"whatsapp", "whatsapp  (WhatsApp Business)"},
 	{"line", "line      (LINE)"},
+	{"teams", "teams     (Microsoft Teams)"},
 	{"skip", "skip      (configure later)"},
 }
 
@@ -503,6 +522,8 @@ func stepPlatform(cfg *config.Config) {
 		stepWhatsApp(cfg)
 	case "line":
 		stepLINE(cfg)
+	case "teams":
+		stepTeams(cfg)
 	case "skip":
 		fmt.Println("\n  > Platform configuration skipped")
 	}
@@ -564,6 +585,14 @@ func stepLINE(cfg *config.Config) {
 	cfg.Platforms.LINE.ChannelSecret = promptText("LINE Channel Secret", cfg.Platforms.LINE.ChannelSecret)
 	cfg.Platforms.LINE.ChannelToken = promptText("LINE Channel Token", cfg.Platforms.LINE.ChannelToken)
 	fmt.Println("\n  > LINE configured")
+}
+
+func stepTeams(cfg *config.Config) {
+	fmt.Println()
+	cfg.Platforms.Teams.AppID = promptText("Teams App ID", cfg.Platforms.Teams.AppID)
+	cfg.Platforms.Teams.AppPassword = promptText("Teams App Password", cfg.Platforms.Teams.AppPassword)
+	cfg.Platforms.Teams.TenantID = promptText("Teams Tenant ID", cfg.Platforms.Teams.TenantID)
+	fmt.Println("\n  > Teams configured")
 }
 
 func stepWeChat(cfg *config.Config) {
