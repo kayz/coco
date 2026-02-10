@@ -24,6 +24,7 @@ import (
 	"github.com/pltanton/lingti-bot/internal/platforms/mattermost"
 	"github.com/pltanton/lingti-bot/internal/platforms/nostr"
 	signalplatform "github.com/pltanton/lingti-bot/internal/platforms/signal"
+	"github.com/pltanton/lingti-bot/internal/platforms/zalo"
 	"github.com/pltanton/lingti-bot/internal/platforms/twitch"
 	"github.com/pltanton/lingti-bot/internal/platforms/matrix"
 	"github.com/pltanton/lingti-bot/internal/platforms/teams"
@@ -70,6 +71,9 @@ var (
 	twitchBotName        string
 	nostrPrivateKey      string
 	nostrRelays          string
+	zaloAppID            string
+	zaloSecretKey        string
+	zaloAccessToken      string
 	whatsappPhoneID      string
 	whatsappAccessToken  string
 	whatsappVerifyToken  string
@@ -147,6 +151,9 @@ func init() {
 	routerCmd.Flags().StringVar(&twitchBotName, "twitch-bot-name", "", "Twitch Bot Name (or TWITCH_BOT_NAME env)")
 	routerCmd.Flags().StringVar(&nostrPrivateKey, "nostr-private-key", "", "NOSTR Private Key (or NOSTR_PRIVATE_KEY env)")
 	routerCmd.Flags().StringVar(&nostrRelays, "nostr-relays", "", "NOSTR Relay URLs (or NOSTR_RELAYS env)")
+	routerCmd.Flags().StringVar(&zaloAppID, "zalo-app-id", "", "Zalo App ID (or ZALO_APP_ID env)")
+	routerCmd.Flags().StringVar(&zaloSecretKey, "zalo-secret-key", "", "Zalo Secret Key (or ZALO_SECRET_KEY env)")
+	routerCmd.Flags().StringVar(&zaloAccessToken, "zalo-access-token", "", "Zalo Access Token (or ZALO_ACCESS_TOKEN env)")
 	routerCmd.Flags().StringVar(&whatsappPhoneID, "whatsapp-phone-id", "", "WhatsApp Phone Number ID (or WHATSAPP_PHONE_NUMBER_ID env)")
 	routerCmd.Flags().StringVar(&whatsappAccessToken, "whatsapp-access-token", "", "WhatsApp Access Token (or WHATSAPP_ACCESS_TOKEN env)")
 	routerCmd.Flags().StringVar(&whatsappVerifyToken, "whatsapp-verify-token", "", "WhatsApp Verify Token (or WHATSAPP_VERIFY_TOKEN env)")
@@ -204,6 +211,15 @@ func runRouter(cmd *cobra.Command, args []string) {
 	}
 	if dingtalkClientSecret == "" {
 		dingtalkClientSecret = os.Getenv("DINGTALK_CLIENT_SECRET")
+	}
+	if zaloAppID == "" {
+		zaloAppID = os.Getenv("ZALO_APP_ID")
+	}
+	if zaloSecretKey == "" {
+		zaloSecretKey = os.Getenv("ZALO_SECRET_KEY")
+	}
+	if zaloAccessToken == "" {
+		zaloAccessToken = os.Getenv("ZALO_ACCESS_TOKEN")
 	}
 	if nostrPrivateKey == "" {
 		nostrPrivateKey = os.Getenv("NOSTR_PRIVATE_KEY")
@@ -370,6 +386,15 @@ func runRouter(cmd *cobra.Command, args []string) {
 		}
 		if dingtalkClientSecret == "" {
 			dingtalkClientSecret = savedCfg.Platforms.DingTalk.ClientSecret
+		}
+		if zaloAppID == "" {
+			zaloAppID = savedCfg.Platforms.Zalo.AppID
+		}
+		if zaloSecretKey == "" {
+			zaloSecretKey = savedCfg.Platforms.Zalo.SecretKey
+		}
+		if zaloAccessToken == "" {
+			zaloAccessToken = savedCfg.Platforms.Zalo.AccessToken
 		}
 		if nostrPrivateKey == "" {
 			nostrPrivateKey = savedCfg.Platforms.NOSTR.PrivateKey
@@ -597,6 +622,22 @@ func runRouter(cmd *cobra.Command, args []string) {
 		r.Register(dingtalkPlatform)
 	} else {
 		logger.Info("DingTalk tokens not provided, skipping DingTalk integration")
+	}
+
+	// Register Zalo if tokens are provided
+	if zaloAppID != "" && zaloAccessToken != "" {
+		zaloPlatform, err := zalo.New(zalo.Config{
+			AppID:       zaloAppID,
+			SecretKey:   zaloSecretKey,
+			AccessToken: zaloAccessToken,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating Zalo platform: %v\n", err)
+			os.Exit(1)
+		}
+		r.Register(zaloPlatform)
+	} else {
+		logger.Info("Zalo tokens not provided, skipping Zalo integration")
 	}
 
 	// Register NOSTR if tokens are provided

@@ -77,6 +77,10 @@ var (
 	// NOSTR
 	onboardNOSTRPrivateKey string
 	onboardNOSTRRelays     string
+	// Zalo
+	onboardZaloAppID       string
+	onboardZaloSecretKey   string
+	onboardZaloAccessToken string
 )
 
 var onboardCmd = &cobra.Command{
@@ -163,6 +167,10 @@ func init() {
 	// NOSTR
 	onboardCmd.Flags().StringVar(&onboardNOSTRPrivateKey, "nostr-private-key", "", "NOSTR Private Key")
 	onboardCmd.Flags().StringVar(&onboardNOSTRRelays, "nostr-relays", "", "NOSTR Relay URLs (comma-separated)")
+	// Zalo
+	onboardCmd.Flags().StringVar(&onboardZaloAppID, "zalo-app-id", "", "Zalo App ID")
+	onboardCmd.Flags().StringVar(&onboardZaloSecretKey, "zalo-secret-key", "", "Zalo Secret Key")
+	onboardCmd.Flags().StringVar(&onboardZaloAccessToken, "zalo-access-token", "", "Zalo Access Token")
 }
 
 var scanner *bufio.Scanner
@@ -398,6 +406,16 @@ func applyOnboardFlags(cfg *config.Config) {
 		if onboardNOSTRRelays != "" {
 			cfg.Platforms.NOSTR.Relays = onboardNOSTRRelays
 		}
+	case "zalo":
+		if onboardZaloAppID != "" {
+			cfg.Platforms.Zalo.AppID = onboardZaloAppID
+		}
+		if onboardZaloSecretKey != "" {
+			cfg.Platforms.Zalo.SecretKey = onboardZaloSecretKey
+		}
+		if onboardZaloAccessToken != "" {
+			cfg.Platforms.Zalo.AccessToken = onboardZaloAccessToken
+		}
 	}
 }
 
@@ -602,6 +620,7 @@ var platformOptions = []platformInfo{
 	{"signal", "signal    (Signal)"},
 	{"twitch", "twitch    (Twitch)"},
 	{"nostr", "nostr     (NOSTR)"},
+	{"zalo", "zalo      (Zalo)"},
 	{"skip", "skip      (configure later)"},
 }
 
@@ -651,6 +670,8 @@ func stepPlatform(cfg *config.Config) {
 		stepTwitch(cfg)
 	case "nostr":
 		stepNOSTR(cfg)
+	case "zalo":
+		stepZalo(cfg)
 	case "skip":
 		fmt.Println("\n  > Platform configuration skipped")
 	}
@@ -773,6 +794,14 @@ func stepNOSTR(cfg *config.Config) {
 	cfg.Platforms.NOSTR.PrivateKey = promptText("NOSTR Private Key (hex or nsec)", cfg.Platforms.NOSTR.PrivateKey)
 	cfg.Platforms.NOSTR.Relays = promptText("NOSTR Relay URLs (comma-separated)", cfg.Platforms.NOSTR.Relays)
 	fmt.Println("\n  > NOSTR configured")
+}
+
+func stepZalo(cfg *config.Config) {
+	fmt.Println()
+	cfg.Platforms.Zalo.AppID = promptText("Zalo App ID", cfg.Platforms.Zalo.AppID)
+	cfg.Platforms.Zalo.SecretKey = promptText("Zalo Secret Key", cfg.Platforms.Zalo.SecretKey)
+	cfg.Platforms.Zalo.AccessToken = promptText("Zalo Access Token", cfg.Platforms.Zalo.AccessToken)
+	fmt.Println("\n  > Zalo configured")
 }
 
 func stepWeChat(cfg *config.Config) {

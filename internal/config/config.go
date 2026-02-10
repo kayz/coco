@@ -60,6 +60,7 @@ type PlatformConfig struct {
 	Signal     SignalConfig     `yaml:"signal,omitempty"`
 	Twitch     TwitchConfig     `yaml:"twitch,omitempty"`
 	NOSTR      NOSTRConfig      `yaml:"nostr,omitempty"`
+	Zalo       ZaloConfig       `yaml:"zalo,omitempty"`
 }
 
 type WeComConfig struct {
@@ -147,6 +148,12 @@ type TwitchConfig struct {
 type NOSTRConfig struct {
 	PrivateKey string `yaml:"private_key,omitempty"`
 	Relays     string `yaml:"relays,omitempty"`
+}
+
+type ZaloConfig struct {
+	AppID       string `yaml:"app_id,omitempty"`
+	SecretKey   string `yaml:"secret_key,omitempty"`
+	AccessToken string `yaml:"access_token,omitempty"`
 }
 
 type SecurityConfig struct {
