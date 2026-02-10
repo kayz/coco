@@ -64,6 +64,9 @@ var (
 	onboardMattermostServerURL string
 	onboardMattermostToken     string
 	onboardMattermostTeamName  string
+	// iMessage
+	onboardBlueBubblesURL      string
+	onboardBlueBubblesPassword string
 )
 
 var onboardCmd = &cobra.Command{
@@ -137,6 +140,9 @@ func init() {
 	onboardCmd.Flags().StringVar(&onboardMattermostServerURL, "mattermost-server-url", "", "Mattermost Server URL")
 	onboardCmd.Flags().StringVar(&onboardMattermostToken, "mattermost-token", "", "Mattermost Token")
 	onboardCmd.Flags().StringVar(&onboardMattermostTeamName, "mattermost-team-name", "", "Mattermost Team Name")
+	// iMessage
+	onboardCmd.Flags().StringVar(&onboardBlueBubblesURL, "bluebubbles-url", "", "BlueBubbles Server URL")
+	onboardCmd.Flags().StringVar(&onboardBlueBubblesPassword, "bluebubbles-password", "", "BlueBubbles Password")
 }
 
 var scanner *bufio.Scanner
@@ -341,6 +347,13 @@ func applyOnboardFlags(cfg *config.Config) {
 		if onboardMattermostTeamName != "" {
 			cfg.Platforms.Mattermost.TeamName = onboardMattermostTeamName
 		}
+	case "imessage":
+		if onboardBlueBubblesURL != "" {
+			cfg.Platforms.IMessage.BlueBubblesURL = onboardBlueBubblesURL
+		}
+		if onboardBlueBubblesPassword != "" {
+			cfg.Platforms.IMessage.BlueBubblesPassword = onboardBlueBubblesPassword
+		}
 	}
 }
 
@@ -541,6 +554,7 @@ var platformOptions = []platformInfo{
 	{"matrix", "matrix    (Matrix/Element)"},
 	{"googlechat", "googlechat (Google Chat)"},
 	{"mattermost", "mattermost (Mattermost)"},
+	{"imessage", "imessage  (iMessage/BlueBubbles)"},
 	{"skip", "skip      (configure later)"},
 }
 
@@ -582,6 +596,8 @@ func stepPlatform(cfg *config.Config) {
 		stepGoogleChat(cfg)
 	case "mattermost":
 		stepMattermost(cfg)
+	case "imessage":
+		stepIMessage(cfg)
 	case "skip":
 		fmt.Println("\n  > Platform configuration skipped")
 	}
@@ -674,6 +690,14 @@ func stepMattermost(cfg *config.Config) {
 	cfg.Platforms.Mattermost.Token = promptText("Mattermost Token", cfg.Platforms.Mattermost.Token)
 	cfg.Platforms.Mattermost.TeamName = promptText("Mattermost Team Name", cfg.Platforms.Mattermost.TeamName)
 	fmt.Println("\n  > Mattermost configured")
+}
+
+func stepIMessage(cfg *config.Config) {
+	fmt.Println()
+	fmt.Println("  iMessage requires BlueBubbles server running on macOS.")
+	cfg.Platforms.IMessage.BlueBubblesURL = promptText("BlueBubbles Server URL", cfg.Platforms.IMessage.BlueBubblesURL)
+	cfg.Platforms.IMessage.BlueBubblesPassword = promptText("BlueBubbles Password", cfg.Platforms.IMessage.BlueBubblesPassword)
+	fmt.Println("\n  > iMessage configured")
 }
 
 func stepWeChat(cfg *config.Config) {

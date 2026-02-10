@@ -16,6 +16,7 @@ import (
 	"github.com/pltanton/lingti-bot/internal/platforms/discord"
 	"github.com/pltanton/lingti-bot/internal/platforms/feishu"
 	"github.com/pltanton/lingti-bot/internal/platforms/googlechat"
+	"github.com/pltanton/lingti-bot/internal/platforms/imessage"
 	"github.com/pltanton/lingti-bot/internal/platforms/slack"
 	"github.com/pltanton/lingti-bot/internal/platforms/telegram"
 	"github.com/pltanton/lingti-bot/internal/platforms/wecom"
@@ -57,6 +58,8 @@ var (
 	mattermostServerURL  string
 	mattermostToken      string
 	mattermostTeamName   string
+	blueBubblesURL       string
+	blueBubblesPassword  string
 	whatsappPhoneID      string
 	whatsappAccessToken  string
 	whatsappVerifyToken  string
@@ -125,6 +128,8 @@ func init() {
 	routerCmd.Flags().StringVar(&mattermostServerURL, "mattermost-server-url", "", "Mattermost Server URL (or MATTERMOST_SERVER_URL env)")
 	routerCmd.Flags().StringVar(&mattermostToken, "mattermost-token", "", "Mattermost Token (or MATTERMOST_TOKEN env)")
 	routerCmd.Flags().StringVar(&mattermostTeamName, "mattermost-team-name", "", "Mattermost Team Name (or MATTERMOST_TEAM_NAME env)")
+	routerCmd.Flags().StringVar(&blueBubblesURL, "bluebubbles-url", "", "BlueBubbles Server URL (or BLUEBUBBLES_URL env)")
+	routerCmd.Flags().StringVar(&blueBubblesPassword, "bluebubbles-password", "", "BlueBubbles Password (or BLUEBUBBLES_PASSWORD env)")
 	routerCmd.Flags().StringVar(&whatsappPhoneID, "whatsapp-phone-id", "", "WhatsApp Phone Number ID (or WHATSAPP_PHONE_NUMBER_ID env)")
 	routerCmd.Flags().StringVar(&whatsappAccessToken, "whatsapp-access-token", "", "WhatsApp Access Token (or WHATSAPP_ACCESS_TOKEN env)")
 	routerCmd.Flags().StringVar(&whatsappVerifyToken, "whatsapp-verify-token", "", "WhatsApp Verify Token (or WHATSAPP_VERIFY_TOKEN env)")
@@ -182,6 +187,12 @@ func runRouter(cmd *cobra.Command, args []string) {
 	}
 	if dingtalkClientSecret == "" {
 		dingtalkClientSecret = os.Getenv("DINGTALK_CLIENT_SECRET")
+	}
+	if blueBubblesURL == "" {
+		blueBubblesURL = os.Getenv("BLUEBUBBLES_URL")
+	}
+	if blueBubblesPassword == "" {
+		blueBubblesPassword = os.Getenv("BLUEBUBBLES_PASSWORD")
 	}
 	if mattermostServerURL == "" {
 		mattermostServerURL = os.Getenv("MATTERMOST_SERVER_URL")
@@ -321,6 +332,12 @@ func runRouter(cmd *cobra.Command, args []string) {
 		}
 		if dingtalkClientSecret == "" {
 			dingtalkClientSecret = savedCfg.Platforms.DingTalk.ClientSecret
+		}
+		if blueBubblesURL == "" {
+			blueBubblesURL = savedCfg.Platforms.IMessage.BlueBubblesURL
+		}
+		if blueBubblesPassword == "" {
+			blueBubblesPassword = savedCfg.Platforms.IMessage.BlueBubblesPassword
 		}
 		if mattermostServerURL == "" {
 			mattermostServerURL = savedCfg.Platforms.Mattermost.ServerURL
@@ -521,6 +538,21 @@ func runRouter(cmd *cobra.Command, args []string) {
 		r.Register(dingtalkPlatform)
 	} else {
 		logger.Info("DingTalk tokens not provided, skipping DingTalk integration")
+	}
+
+	// Register iMessage if tokens are provided
+	if blueBubblesURL != "" && blueBubblesPassword != "" {
+		imessagePlatform, err := imessage.New(imessage.Config{
+			BlueBubblesURL:      blueBubblesURL,
+			BlueBubblesPassword: blueBubblesPassword,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating iMessage platform: %v\n", err)
+			os.Exit(1)
+		}
+		r.Register(imessagePlatform)
+	} else {
+		logger.Info("iMessage tokens not provided, skipping iMessage integration")
 	}
 
 	// Register Mattermost if tokens are provided

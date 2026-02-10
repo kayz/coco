@@ -56,6 +56,7 @@ type PlatformConfig struct {
 	Matrix   MatrixConfig   `yaml:"matrix,omitempty"`
 	GoogleChat GoogleChatConfig `yaml:"googlechat,omitempty"`
 	Mattermost MattermostConfig `yaml:"mattermost,omitempty"`
+	IMessage   IMessageConfig   `yaml:"imessage,omitempty"`
 }
 
 type WeComConfig struct {
@@ -122,6 +123,11 @@ type MattermostConfig struct {
 	ServerURL string `yaml:"server_url,omitempty"`
 	Token     string `yaml:"token,omitempty"`
 	TeamName  string `yaml:"team_name,omitempty"`
+}
+
+type IMessageConfig struct {
+	BlueBubblesURL      string `yaml:"bluebubbles_url,omitempty"`
+	BlueBubblesPassword string `yaml:"bluebubbles_password,omitempty"`
 }
 
 type SecurityConfig struct {
