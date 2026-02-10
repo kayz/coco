@@ -181,8 +181,15 @@ func runRelay(cmd *cobra.Command, args []string) {
 		if relayModel == "" {
 			relayModel = savedCfg.AI.Model
 		}
+		// Read relay-specific config (platform, user-id) from saved config
+		if relayPlatform == "" && savedCfg.Relay.Platform != "" {
+			relayPlatform = savedCfg.Relay.Platform
+		}
+		if relayUserID == "" && savedCfg.Relay.UserID != "" {
+			relayUserID = savedCfg.Relay.UserID
+		}
 		if relayPlatform == "" && savedCfg.Mode == "relay" {
-			// Infer platform from saved config
+			// Infer platform from saved platform credentials
 			if savedCfg.Platforms.WeCom.CorpID != "" {
 				relayPlatform = "wecom"
 			}

@@ -16,7 +16,13 @@ type Config struct {
 	AI        AIConfig        `yaml:"ai,omitempty"`
 	Platforms PlatformConfig  `yaml:"platforms,omitempty"`
 	Mode      string          `yaml:"mode,omitempty"` // "relay" or "router"
+	Relay     RelayConfig     `yaml:"relay,omitempty"`
 	Skills    SkillsConfig    `yaml:"skills,omitempty"`
+}
+
+type RelayConfig struct {
+	UserID   string `yaml:"user_id,omitempty"`
+	Platform string `yaml:"platform,omitempty"` // "feishu", "slack", "wechat", "wecom"
 }
 
 type SkillsConfig struct {

@@ -49,9 +49,45 @@ func New(cfg Config) (*Agent, error) {
 	}, nil
 }
 
+// openaiCompatProviders maps provider names to their default base URLs and models.
+var openaiCompatProviders = map[string]struct {
+	baseURL string
+	model   string
+}{
+	"minimax":    {"https://api.minimax.chat/v1", "MiniMax-Text-01"},
+	"doubao":     {"https://ark.cn-beijing.volces.com/api/v3", "doubao-pro-32k"},
+	"zhipu":      {"https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"},
+	"openai":     {"https://api.openai.com/v1", "gpt-4o"},
+	"gemini":     {"https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.0-flash"},
+	"yi":         {"https://api.lingyiwanwu.com/v1", "yi-large"},
+	"stepfun":    {"https://api.stepfun.com/v1", "step-2-16k"},
+	"siliconflow": {"https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-72B-Instruct"},
+	"grok":       {"https://api.x.ai/v1", "grok-2-latest"},
+	"baichuan":   {"https://api.baichuan-ai.com/v1", "Baichuan4"},
+	"spark":      {"https://spark-api-open.xf-yun.com/v1", "generalv3.5"},
+}
+
+// openaiCompatAliases maps alternative names to canonical provider names.
+var openaiCompatAliases = map[string]string{
+	"glm":          "zhipu",
+	"chatglm":      "zhipu",
+	"gpt":          "openai",
+	"chatgpt":      "openai",
+	"lingyiwanwu":  "yi",
+	"wanwu":        "yi",
+	"google":       "gemini",
+	"xai":          "grok",
+	"bytedance":    "doubao",
+	"volcengine":   "doubao",
+	"iflytek":      "spark",
+	"xunfei":       "spark",
+}
+
 // createProvider creates the appropriate AI provider based on config
 func createProvider(cfg Config) (Provider, error) {
-	switch strings.ToLower(cfg.Provider) {
+	name := strings.ToLower(cfg.Provider)
+
+	switch name {
 	case "deepseek":
 		return NewDeepSeekProvider(DeepSeekConfig{
 			APIKey:  cfg.APIKey,
@@ -77,7 +113,22 @@ func createProvider(cfg Config) (Provider, error) {
 			Model:   cfg.Model,
 		})
 	default:
-		return nil, fmt.Errorf("unknown provider: %s (supported: claude, deepseek, kimi, qwen)", cfg.Provider)
+		// Check aliases
+		if canonical, ok := openaiCompatAliases[name]; ok {
+			name = canonical
+		}
+		// Check OpenAI-compatible providers
+		if defaults, ok := openaiCompatProviders[name]; ok {
+			return NewOpenAICompatProvider(OpenAICompatConfig{
+				ProviderName: name,
+				APIKey:       cfg.APIKey,
+				BaseURL:      cfg.BaseURL,
+				Model:        cfg.Model,
+				DefaultURL:   defaults.baseURL,
+				DefaultModel: defaults.model,
+			})
+		}
+		return nil, fmt.Errorf("unknown provider: %s (supported: claude, deepseek, kimi, qwen, minimax, doubao, zhipu, openai, gemini, yi, stepfun, siliconflow, grok, baichuan, spark)", cfg.Provider)
 	}
 }
 

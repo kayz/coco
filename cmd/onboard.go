@@ -15,13 +15,14 @@ import (
 )
 
 var (
-	onboardProvider  string
-	onboardAPIKey    string
-	onboardBaseURL   string
-	onboardModel     string
-	onboardPlatform  string
-	onboardMode      string
-	onboardReset     bool
+	onboardProvider    string
+	onboardAPIKey      string
+	onboardBaseURL     string
+	onboardModel       string
+	onboardPlatform    string
+	onboardMode        string
+	onboardReset       bool
+	onboardRelayUserID string
 	// WeCom
 	onboardWeComCorpID  string
 	onboardWeComAgentID string
@@ -64,13 +65,14 @@ Config saved to:
 func init() {
 	rootCmd.AddCommand(onboardCmd)
 
-	onboardCmd.Flags().StringVar(&onboardProvider, "provider", "", "AI provider: deepseek, qwen, claude, kimi")
+	onboardCmd.Flags().StringVar(&onboardProvider, "provider", "", "AI provider: deepseek, qwen, claude, kimi, minimax, doubao, zhipu, openai, gemini, yi, stepfun, baichuan, spark, siliconflow, grok")
 	onboardCmd.Flags().StringVar(&onboardAPIKey, "api-key", "", "AI API key")
 	onboardCmd.Flags().StringVar(&onboardBaseURL, "base-url", "", "Custom API base URL")
 	onboardCmd.Flags().StringVar(&onboardModel, "model", "", "Model name")
-	onboardCmd.Flags().StringVar(&onboardPlatform, "platform", "", "Platform: wecom, dingtalk, feishu, slack, telegram, discord")
+	onboardCmd.Flags().StringVar(&onboardPlatform, "platform", "", "Platform: wecom, wechat, dingtalk, feishu, slack, telegram, discord")
 	onboardCmd.Flags().StringVar(&onboardMode, "mode", "", "Connection mode: relay, router")
 	onboardCmd.Flags().BoolVar(&onboardReset, "reset", false, "Clear existing config and start fresh")
+	onboardCmd.Flags().StringVar(&onboardRelayUserID, "relay-user-id", "", "Relay user ID (from /whoami)")
 
 	// WeCom
 	onboardCmd.Flags().StringVar(&onboardWeComCorpID, "wecom-corp-id", "", "WeCom Corp ID")
@@ -186,6 +188,11 @@ func applyOnboardFlags(cfg *config.Config) {
 		cfg.Mode = onboardMode
 	}
 
+	// Relay user ID
+	if onboardRelayUserID != "" {
+		cfg.Relay.UserID = onboardRelayUserID
+	}
+
 	// Platform credentials
 	switch onboardPlatform {
 	case "wecom":
@@ -204,6 +211,9 @@ func applyOnboardFlags(cfg *config.Config) {
 		if onboardWeComAESKey != "" {
 			cfg.Platforms.WeCom.AESKey = onboardWeComAESKey
 		}
+	case "wechat":
+		cfg.Relay.Platform = "wechat"
+		cfg.Mode = "relay"
 	case "slack":
 		if onboardSlackBotToken != "" {
 			cfg.Platforms.Slack.BotToken = onboardSlackBotToken
@@ -270,10 +280,21 @@ type providerInfo struct {
 }
 
 var providers = []providerInfo{
-	{"deepseek", "deepseek  (recommended)", "https://platform.deepseek.com/api_keys", "deepseek-chat"},
-	{"qwen", "qwen      (tongyi qianwen)", "https://bailian.console.aliyun.com/", "qwen-plus"},
-	{"claude", "claude    (Anthropic)", "https://console.anthropic.com/", "claude-sonnet-4-20250514"},
-	{"kimi", "kimi      (Moonshot)", "https://platform.moonshot.cn/", "moonshot-v1-8k"},
+	{"deepseek", "deepseek     (recommended)", "https://platform.deepseek.com/api_keys", "deepseek-chat"},
+	{"qwen", "qwen         (tongyi qianwen)", "https://bailian.console.aliyun.com/", "qwen-plus"},
+	{"claude", "claude       (Anthropic)", "https://console.anthropic.com/", "claude-sonnet-4-20250514"},
+	{"kimi", "kimi         (Moonshot)", "https://platform.moonshot.cn/", "moonshot-v1-8k"},
+	{"minimax", "minimax      (MiniMax/海螺)", "https://platform.minimaxi.com/", "MiniMax-Text-01"},
+	{"doubao", "doubao       (ByteDance/豆包)", "https://console.volcengine.com/ark", "doubao-pro-32k"},
+	{"zhipu", "zhipu        (GLM/智谱)", "https://open.bigmodel.cn/", "glm-4-flash"},
+	{"openai", "openai       (GPT)", "https://platform.openai.com/api-keys", "gpt-4o"},
+	{"gemini", "gemini       (Google)", "https://aistudio.google.com/apikey", "gemini-2.0-flash"},
+	{"yi", "yi           (Lingyiwanwu/零一)", "https://platform.lingyiwanwu.com/", "yi-large"},
+	{"stepfun", "stepfun      (StepFun/阶跃)", "https://platform.stepfun.com/", "step-2-16k"},
+	{"baichuan", "baichuan     (Baichuan/百川)", "https://platform.baichuan-ai.com/", "Baichuan4"},
+	{"spark", "spark        (iFlytek/讯飞星火)", "https://console.xfyun.cn/", "generalv3.5"},
+	{"siliconflow", "siliconflow  (aggregator/硅基流动)", "https://cloud.siliconflow.cn/", "Qwen/Qwen2.5-72B-Instruct"},
+	{"grok", "grok         (xAI)", "https://console.x.ai/", "grok-2-latest"},
 }
 
 // detectClaudeOAuthToken tries to find an existing Claude OAuth token from env vars or macOS Keychain.
@@ -409,9 +430,10 @@ type platformInfo struct {
 }
 
 var platformOptions = []platformInfo{
-	{"wecom", "wecom     (WeCom)"},
-	{"dingtalk", "dingtalk  (DingTalk)"},
-	{"feishu", "feishu    (Feishu/Lark)"},
+	{"wecom", "wecom     (WeCom/企业微信)"},
+	{"wechat", "wechat    (WeChat/微信, relay only)"},
+	{"dingtalk", "dingtalk  (DingTalk/钉钉)"},
+	{"feishu", "feishu    (Feishu/Lark/飞书)"},
 	{"slack", "slack"},
 	{"telegram", "telegram"},
 	{"discord", "discord"},
@@ -432,6 +454,8 @@ func stepPlatform(cfg *config.Config) {
 	switch platform {
 	case "wecom":
 		stepWecom(cfg)
+	case "wechat":
+		stepWeChat(cfg)
 	case "dingtalk":
 		stepDingTalk(cfg)
 	case "feishu":
@@ -490,8 +514,27 @@ func stepDiscord(cfg *config.Config) {
 	fmt.Println("\n  > Discord configured")
 }
 
+func stepWeChat(cfg *config.Config) {
+	fmt.Println()
+	fmt.Println("  WeChat works via the cloud relay service.")
+	fmt.Println("  1. Follow the official lingti-bot on WeChat")
+	fmt.Println("  2. Send /whoami to get your user ID")
+	fmt.Println("  3. Enter the user ID below")
+	fmt.Println()
+	cfg.Relay.UserID = promptText("WeChat User ID (from /whoami)", cfg.Relay.UserID)
+	cfg.Relay.Platform = "wechat"
+	cfg.Mode = "relay"
+	fmt.Println("\n  > WeChat configured (relay mode auto-selected)")
+}
+
 func stepConnectionMode(cfg *config.Config) {
 	fmt.Println("\n  Step 3/3: Connection Mode")
+
+	// If mode was already set by platform (e.g., wechat forces relay), skip
+	if cfg.Mode == "relay" && cfg.Relay.Platform != "" {
+		fmt.Printf("\n  > Connection mode: relay (set by platform)\n")
+		return
+	}
 
 	defIdx := 0
 	if cfg.Mode == "router" {
@@ -505,11 +548,44 @@ func stepConnectionMode(cfg *config.Config) {
 
 	if idx == 0 {
 		cfg.Mode = "relay"
+		stepRelayConfig(cfg)
 	} else {
 		cfg.Mode = "router"
 	}
 
 	fmt.Printf("\n  > Connection mode: %s\n", cfg.Mode)
+}
+
+// stepRelayConfig prompts for relay-specific settings when relay mode is selected.
+func stepRelayConfig(cfg *config.Config) {
+	// If relay platform already set (e.g., wechat), skip
+	if cfg.Relay.Platform != "" {
+		return
+	}
+
+	// Determine relay platform from configured platform credentials
+	relayPlatforms := []string{}
+	if cfg.Platforms.Feishu.AppID != "" {
+		relayPlatforms = append(relayPlatforms, "feishu")
+	}
+	if cfg.Platforms.Slack.BotToken != "" {
+		relayPlatforms = append(relayPlatforms, "slack")
+	}
+	if cfg.Platforms.WeCom.CorpID != "" {
+		relayPlatforms = append(relayPlatforms, "wecom")
+	}
+
+	// For feishu/slack relay, prompt for user ID
+	if len(relayPlatforms) == 1 {
+		cfg.Relay.Platform = relayPlatforms[0]
+	}
+
+	if cfg.Relay.Platform == "feishu" || cfg.Relay.Platform == "slack" {
+		fmt.Println()
+		fmt.Println("  Relay mode requires a user ID from the official bot.")
+		fmt.Println("  Send /whoami to the bot to get your user ID.")
+		cfg.Relay.UserID = promptText("Relay User ID (from /whoami, or leave empty)", cfg.Relay.UserID)
+	}
 }
 
 func printOnboardSummary(cfg *config.Config) {
@@ -519,8 +595,18 @@ func printOnboardSummary(cfg *config.Config) {
 	fmt.Println()
 
 	if cfg.Mode == "relay" {
-		fmt.Println("  To start the bot, run:")
-		fmt.Println("    lingti-bot relay")
+		if cfg.Relay.UserID != "" && cfg.Relay.Platform != "" {
+			fmt.Println("  To start the bot, run:")
+			fmt.Println("    lingti-bot relay")
+		} else if cfg.Relay.Platform == "wecom" {
+			fmt.Println("  To start the bot, run:")
+			fmt.Println("    lingti-bot relay --platform wecom")
+		} else {
+			fmt.Println("  To start the bot, run:")
+			fmt.Println("    lingti-bot relay --platform <platform> --user-id <your-id>")
+			fmt.Println()
+			fmt.Println("  Get your user ID by sending /whoami to the official bot.")
+		}
 	} else {
 		fmt.Println("  To start the bot, run:")
 		fmt.Println("    lingti-bot router")
