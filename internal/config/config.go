@@ -53,6 +53,7 @@ type PlatformConfig struct {
 	WhatsApp WhatsAppConfig `yaml:"whatsapp,omitempty"`
 	LINE     LINEConfig     `yaml:"line,omitempty"`
 	Teams    TeamsConfig    `yaml:"teams,omitempty"`
+	Matrix   MatrixConfig   `yaml:"matrix,omitempty"`
 }
 
 type WeComConfig struct {
@@ -102,6 +103,12 @@ type TeamsConfig struct {
 	AppID       string `yaml:"app_id,omitempty"`
 	AppPassword string `yaml:"app_password,omitempty"`
 	TenantID    string `yaml:"tenant_id,omitempty"`
+}
+
+type MatrixConfig struct {
+	HomeserverURL string `yaml:"homeserver_url,omitempty"`
+	UserID        string `yaml:"user_id,omitempty"`
+	AccessToken   string `yaml:"access_token,omitempty"`
 }
 
 type SecurityConfig struct {

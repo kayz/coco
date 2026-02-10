@@ -19,6 +19,7 @@ import (
 	"github.com/pltanton/lingti-bot/internal/platforms/telegram"
 	"github.com/pltanton/lingti-bot/internal/platforms/wecom"
 	"github.com/pltanton/lingti-bot/internal/platforms/line"
+	"github.com/pltanton/lingti-bot/internal/platforms/matrix"
 	"github.com/pltanton/lingti-bot/internal/platforms/teams"
 	"github.com/pltanton/lingti-bot/internal/platforms/whatsapp"
 	"github.com/pltanton/lingti-bot/internal/router"
@@ -46,6 +47,9 @@ var (
 	teamsAppID           string
 	teamsAppPassword     string
 	teamsTenantID        string
+	matrixHomeserverURL  string
+	matrixUserID         string
+	matrixAccessToken    string
 	whatsappPhoneID      string
 	whatsappAccessToken  string
 	whatsappVerifyToken  string
@@ -106,6 +110,9 @@ func init() {
 	routerCmd.Flags().StringVar(&teamsAppID, "teams-app-id", "", "Teams App ID (or TEAMS_APP_ID env)")
 	routerCmd.Flags().StringVar(&teamsAppPassword, "teams-app-password", "", "Teams App Password (or TEAMS_APP_PASSWORD env)")
 	routerCmd.Flags().StringVar(&teamsTenantID, "teams-tenant-id", "", "Teams Tenant ID (or TEAMS_TENANT_ID env)")
+	routerCmd.Flags().StringVar(&matrixHomeserverURL, "matrix-homeserver-url", "", "Matrix Homeserver URL (or MATRIX_HOMESERVER_URL env)")
+	routerCmd.Flags().StringVar(&matrixUserID, "matrix-user-id", "", "Matrix User ID (or MATRIX_USER_ID env)")
+	routerCmd.Flags().StringVar(&matrixAccessToken, "matrix-access-token", "", "Matrix Access Token (or MATRIX_ACCESS_TOKEN env)")
 	routerCmd.Flags().StringVar(&whatsappPhoneID, "whatsapp-phone-id", "", "WhatsApp Phone Number ID (or WHATSAPP_PHONE_NUMBER_ID env)")
 	routerCmd.Flags().StringVar(&whatsappAccessToken, "whatsapp-access-token", "", "WhatsApp Access Token (or WHATSAPP_ACCESS_TOKEN env)")
 	routerCmd.Flags().StringVar(&whatsappVerifyToken, "whatsapp-verify-token", "", "WhatsApp Verify Token (or WHATSAPP_VERIFY_TOKEN env)")
@@ -163,6 +170,15 @@ func runRouter(cmd *cobra.Command, args []string) {
 	}
 	if dingtalkClientSecret == "" {
 		dingtalkClientSecret = os.Getenv("DINGTALK_CLIENT_SECRET")
+	}
+	if matrixHomeserverURL == "" {
+		matrixHomeserverURL = os.Getenv("MATRIX_HOMESERVER_URL")
+	}
+	if matrixUserID == "" {
+		matrixUserID = os.Getenv("MATRIX_USER_ID")
+	}
+	if matrixAccessToken == "" {
+		matrixAccessToken = os.Getenv("MATRIX_ACCESS_TOKEN")
 	}
 	if teamsAppID == "" {
 		teamsAppID = os.Getenv("TEAMS_APP_ID")
@@ -278,6 +294,15 @@ func runRouter(cmd *cobra.Command, args []string) {
 		}
 		if dingtalkClientSecret == "" {
 			dingtalkClientSecret = savedCfg.Platforms.DingTalk.ClientSecret
+		}
+		if matrixHomeserverURL == "" {
+			matrixHomeserverURL = savedCfg.Platforms.Matrix.HomeserverURL
+		}
+		if matrixUserID == "" {
+			matrixUserID = savedCfg.Platforms.Matrix.UserID
+		}
+		if matrixAccessToken == "" {
+			matrixAccessToken = savedCfg.Platforms.Matrix.AccessToken
 		}
 		if teamsAppID == "" {
 			teamsAppID = savedCfg.Platforms.Teams.AppID
@@ -454,6 +479,22 @@ func runRouter(cmd *cobra.Command, args []string) {
 		r.Register(dingtalkPlatform)
 	} else {
 		logger.Info("DingTalk tokens not provided, skipping DingTalk integration")
+	}
+
+	// Register Matrix if tokens are provided
+	if matrixHomeserverURL != "" && matrixAccessToken != "" {
+		matrixPlatform, err := matrix.New(matrix.Config{
+			HomeserverURL: matrixHomeserverURL,
+			UserID:        matrixUserID,
+			AccessToken:   matrixAccessToken,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating Matrix platform: %v\n", err)
+			os.Exit(1)
+		}
+		r.Register(matrixPlatform)
+	} else {
+		logger.Info("Matrix tokens not provided, skipping Matrix integration")
 	}
 
 	// Register Teams if tokens are provided

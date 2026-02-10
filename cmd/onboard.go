@@ -53,6 +53,10 @@ var (
 	onboardTeamsAppID       string
 	onboardTeamsAppPassword string
 	onboardTeamsTenantID    string
+	// Matrix
+	onboardMatrixHomeserverURL string
+	onboardMatrixUserID        string
+	onboardMatrixAccessToken   string
 )
 
 var onboardCmd = &cobra.Command{
@@ -115,6 +119,10 @@ func init() {
 	onboardCmd.Flags().StringVar(&onboardTeamsAppID, "teams-app-id", "", "Teams App ID")
 	onboardCmd.Flags().StringVar(&onboardTeamsAppPassword, "teams-app-password", "", "Teams App Password")
 	onboardCmd.Flags().StringVar(&onboardTeamsTenantID, "teams-tenant-id", "", "Teams Tenant ID")
+	// Matrix
+	onboardCmd.Flags().StringVar(&onboardMatrixHomeserverURL, "matrix-homeserver-url", "", "Matrix Homeserver URL")
+	onboardCmd.Flags().StringVar(&onboardMatrixUserID, "matrix-user-id", "", "Matrix User ID")
+	onboardCmd.Flags().StringVar(&onboardMatrixAccessToken, "matrix-access-token", "", "Matrix Access Token")
 }
 
 var scanner *bufio.Scanner
@@ -291,6 +299,16 @@ func applyOnboardFlags(cfg *config.Config) {
 		}
 		if onboardTeamsTenantID != "" {
 			cfg.Platforms.Teams.TenantID = onboardTeamsTenantID
+		}
+	case "matrix":
+		if onboardMatrixHomeserverURL != "" {
+			cfg.Platforms.Matrix.HomeserverURL = onboardMatrixHomeserverURL
+		}
+		if onboardMatrixUserID != "" {
+			cfg.Platforms.Matrix.UserID = onboardMatrixUserID
+		}
+		if onboardMatrixAccessToken != "" {
+			cfg.Platforms.Matrix.AccessToken = onboardMatrixAccessToken
 		}
 	}
 }
@@ -489,6 +507,7 @@ var platformOptions = []platformInfo{
 	{"whatsapp", "whatsapp  (WhatsApp Business)"},
 	{"line", "line      (LINE)"},
 	{"teams", "teams     (Microsoft Teams)"},
+	{"matrix", "matrix    (Matrix/Element)"},
 	{"skip", "skip      (configure later)"},
 }
 
@@ -524,6 +543,8 @@ func stepPlatform(cfg *config.Config) {
 		stepLINE(cfg)
 	case "teams":
 		stepTeams(cfg)
+	case "matrix":
+		stepMatrix(cfg)
 	case "skip":
 		fmt.Println("\n  > Platform configuration skipped")
 	}
@@ -593,6 +614,14 @@ func stepTeams(cfg *config.Config) {
 	cfg.Platforms.Teams.AppPassword = promptText("Teams App Password", cfg.Platforms.Teams.AppPassword)
 	cfg.Platforms.Teams.TenantID = promptText("Teams Tenant ID", cfg.Platforms.Teams.TenantID)
 	fmt.Println("\n  > Teams configured")
+}
+
+func stepMatrix(cfg *config.Config) {
+	fmt.Println()
+	cfg.Platforms.Matrix.HomeserverURL = promptText("Matrix Homeserver URL", cfg.Platforms.Matrix.HomeserverURL)
+	cfg.Platforms.Matrix.UserID = promptText("Matrix User ID (@bot:server)", cfg.Platforms.Matrix.UserID)
+	cfg.Platforms.Matrix.AccessToken = promptText("Matrix Access Token", cfg.Platforms.Matrix.AccessToken)
+	fmt.Println("\n  > Matrix configured")
 }
 
 func stepWeChat(cfg *config.Config) {
