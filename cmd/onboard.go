@@ -46,6 +46,9 @@ var (
 	onboardWhatsAppPhoneID     string
 	onboardWhatsAppAccessToken string
 	onboardWhatsAppVerifyToken string
+	// LINE
+	onboardLINEChannelSecret string
+	onboardLINEChannelToken  string
 )
 
 var onboardCmd = &cobra.Command{
@@ -101,6 +104,9 @@ func init() {
 	onboardCmd.Flags().StringVar(&onboardWhatsAppPhoneID, "whatsapp-phone-id", "", "WhatsApp Phone Number ID")
 	onboardCmd.Flags().StringVar(&onboardWhatsAppAccessToken, "whatsapp-access-token", "", "WhatsApp Access Token")
 	onboardCmd.Flags().StringVar(&onboardWhatsAppVerifyToken, "whatsapp-verify-token", "", "WhatsApp Verify Token")
+	// LINE
+	onboardCmd.Flags().StringVar(&onboardLINEChannelSecret, "line-channel-secret", "", "LINE Channel Secret")
+	onboardCmd.Flags().StringVar(&onboardLINEChannelToken, "line-channel-token", "", "LINE Channel Token")
 }
 
 var scanner *bufio.Scanner
@@ -260,6 +266,13 @@ func applyOnboardFlags(cfg *config.Config) {
 		}
 		if onboardWhatsAppVerifyToken != "" {
 			cfg.Platforms.WhatsApp.VerifyToken = onboardWhatsAppVerifyToken
+		}
+	case "line":
+		if onboardLINEChannelSecret != "" {
+			cfg.Platforms.LINE.ChannelSecret = onboardLINEChannelSecret
+		}
+		if onboardLINEChannelToken != "" {
+			cfg.Platforms.LINE.ChannelToken = onboardLINEChannelToken
 		}
 	}
 }
@@ -456,6 +469,7 @@ var platformOptions = []platformInfo{
 	{"telegram", "telegram"},
 	{"discord", "discord"},
 	{"whatsapp", "whatsapp  (WhatsApp Business)"},
+	{"line", "line      (LINE)"},
 	{"skip", "skip      (configure later)"},
 }
 
@@ -487,6 +501,8 @@ func stepPlatform(cfg *config.Config) {
 		stepDiscord(cfg)
 	case "whatsapp":
 		stepWhatsApp(cfg)
+	case "line":
+		stepLINE(cfg)
 	case "skip":
 		fmt.Println("\n  > Platform configuration skipped")
 	}
@@ -541,6 +557,13 @@ func stepWhatsApp(cfg *config.Config) {
 	cfg.Platforms.WhatsApp.AccessToken = promptText("WhatsApp Access Token", cfg.Platforms.WhatsApp.AccessToken)
 	cfg.Platforms.WhatsApp.VerifyToken = promptText("WhatsApp Verify Token", cfg.Platforms.WhatsApp.VerifyToken)
 	fmt.Println("\n  > WhatsApp configured")
+}
+
+func stepLINE(cfg *config.Config) {
+	fmt.Println()
+	cfg.Platforms.LINE.ChannelSecret = promptText("LINE Channel Secret", cfg.Platforms.LINE.ChannelSecret)
+	cfg.Platforms.LINE.ChannelToken = promptText("LINE Channel Token", cfg.Platforms.LINE.ChannelToken)
+	fmt.Println("\n  > LINE configured")
 }
 
 func stepWeChat(cfg *config.Config) {
