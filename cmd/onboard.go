@@ -42,6 +42,10 @@ var (
 	// DingTalk
 	onboardDingTalkClientID     string
 	onboardDingTalkClientSecret string
+	// WhatsApp
+	onboardWhatsAppPhoneID     string
+	onboardWhatsAppAccessToken string
+	onboardWhatsAppVerifyToken string
 )
 
 var onboardCmd = &cobra.Command{
@@ -93,6 +97,10 @@ func init() {
 	// DingTalk
 	onboardCmd.Flags().StringVar(&onboardDingTalkClientID, "dingtalk-client-id", "", "DingTalk AppKey")
 	onboardCmd.Flags().StringVar(&onboardDingTalkClientSecret, "dingtalk-client-secret", "", "DingTalk AppSecret")
+	// WhatsApp
+	onboardCmd.Flags().StringVar(&onboardWhatsAppPhoneID, "whatsapp-phone-id", "", "WhatsApp Phone Number ID")
+	onboardCmd.Flags().StringVar(&onboardWhatsAppAccessToken, "whatsapp-access-token", "", "WhatsApp Access Token")
+	onboardCmd.Flags().StringVar(&onboardWhatsAppVerifyToken, "whatsapp-verify-token", "", "WhatsApp Verify Token")
 }
 
 var scanner *bufio.Scanner
@@ -242,6 +250,16 @@ func applyOnboardFlags(cfg *config.Config) {
 		}
 		if onboardDingTalkClientSecret != "" {
 			cfg.Platforms.DingTalk.ClientSecret = onboardDingTalkClientSecret
+		}
+	case "whatsapp":
+		if onboardWhatsAppPhoneID != "" {
+			cfg.Platforms.WhatsApp.PhoneNumberID = onboardWhatsAppPhoneID
+		}
+		if onboardWhatsAppAccessToken != "" {
+			cfg.Platforms.WhatsApp.AccessToken = onboardWhatsAppAccessToken
+		}
+		if onboardWhatsAppVerifyToken != "" {
+			cfg.Platforms.WhatsApp.VerifyToken = onboardWhatsAppVerifyToken
 		}
 	}
 }
@@ -437,6 +455,7 @@ var platformOptions = []platformInfo{
 	{"slack", "slack"},
 	{"telegram", "telegram"},
 	{"discord", "discord"},
+	{"whatsapp", "whatsapp  (WhatsApp Business)"},
 	{"skip", "skip      (configure later)"},
 }
 
@@ -466,6 +485,8 @@ func stepPlatform(cfg *config.Config) {
 		stepTelegram(cfg)
 	case "discord":
 		stepDiscord(cfg)
+	case "whatsapp":
+		stepWhatsApp(cfg)
 	case "skip":
 		fmt.Println("\n  > Platform configuration skipped")
 	}
@@ -512,6 +533,14 @@ func stepDiscord(cfg *config.Config) {
 	fmt.Println()
 	cfg.Platforms.Discord.Token = promptText("Discord Bot Token", cfg.Platforms.Discord.Token)
 	fmt.Println("\n  > Discord configured")
+}
+
+func stepWhatsApp(cfg *config.Config) {
+	fmt.Println()
+	cfg.Platforms.WhatsApp.PhoneNumberID = promptText("WhatsApp Phone Number ID", cfg.Platforms.WhatsApp.PhoneNumberID)
+	cfg.Platforms.WhatsApp.AccessToken = promptText("WhatsApp Access Token", cfg.Platforms.WhatsApp.AccessToken)
+	cfg.Platforms.WhatsApp.VerifyToken = promptText("WhatsApp Verify Token", cfg.Platforms.WhatsApp.VerifyToken)
+	fmt.Println("\n  > WhatsApp configured")
 }
 
 func stepWeChat(cfg *config.Config) {

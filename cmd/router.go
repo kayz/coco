@@ -18,6 +18,7 @@ import (
 	"github.com/pltanton/lingti-bot/internal/platforms/slack"
 	"github.com/pltanton/lingti-bot/internal/platforms/telegram"
 	"github.com/pltanton/lingti-bot/internal/platforms/wecom"
+	"github.com/pltanton/lingti-bot/internal/platforms/whatsapp"
 	"github.com/pltanton/lingti-bot/internal/router"
 	"github.com/pltanton/lingti-bot/internal/voice"
 	"github.com/spf13/cobra"
@@ -38,6 +39,9 @@ var (
 	wecomPort            int
 	dingtalkClientID     string
 	dingtalkClientSecret string
+	whatsappPhoneID      string
+	whatsappAccessToken  string
+	whatsappVerifyToken  string
 	aiProvider           string
 	aiAPIKey             string
 	aiBaseURL            string
@@ -90,6 +94,9 @@ func init() {
 	routerCmd.Flags().IntVar(&wecomPort, "wecom-port", 0, "WeCom Callback Port (or WECOM_PORT env, default: 8080)")
 	routerCmd.Flags().StringVar(&dingtalkClientID, "dingtalk-client-id", "", "DingTalk AppKey (or DINGTALK_CLIENT_ID env)")
 	routerCmd.Flags().StringVar(&dingtalkClientSecret, "dingtalk-client-secret", "", "DingTalk AppSecret (or DINGTALK_CLIENT_SECRET env)")
+	routerCmd.Flags().StringVar(&whatsappPhoneID, "whatsapp-phone-id", "", "WhatsApp Phone Number ID (or WHATSAPP_PHONE_NUMBER_ID env)")
+	routerCmd.Flags().StringVar(&whatsappAccessToken, "whatsapp-access-token", "", "WhatsApp Access Token (or WHATSAPP_ACCESS_TOKEN env)")
+	routerCmd.Flags().StringVar(&whatsappVerifyToken, "whatsapp-verify-token", "", "WhatsApp Verify Token (or WHATSAPP_VERIFY_TOKEN env)")
 	routerCmd.Flags().StringVar(&aiProvider, "provider", "", "AI provider: claude, deepseek, kimi, qwen (or AI_PROVIDER env)")
 	routerCmd.Flags().StringVar(&aiAPIKey, "api-key", "", "AI API Key (or AI_API_KEY env)")
 	routerCmd.Flags().StringVar(&aiBaseURL, "base-url", "", "Custom API base URL (or AI_BASE_URL env)")
@@ -144,6 +151,15 @@ func runRouter(cmd *cobra.Command, args []string) {
 	}
 	if dingtalkClientSecret == "" {
 		dingtalkClientSecret = os.Getenv("DINGTALK_CLIENT_SECRET")
+	}
+	if whatsappPhoneID == "" {
+		whatsappPhoneID = os.Getenv("WHATSAPP_PHONE_NUMBER_ID")
+	}
+	if whatsappAccessToken == "" {
+		whatsappAccessToken = os.Getenv("WHATSAPP_ACCESS_TOKEN")
+	}
+	if whatsappVerifyToken == "" {
+		whatsappVerifyToken = os.Getenv("WHATSAPP_VERIFY_TOKEN")
 	}
 	if aiProvider == "" {
 		aiProvider = os.Getenv("AI_PROVIDER")
@@ -235,6 +251,15 @@ func runRouter(cmd *cobra.Command, args []string) {
 		}
 		if dingtalkClientSecret == "" {
 			dingtalkClientSecret = savedCfg.Platforms.DingTalk.ClientSecret
+		}
+		if whatsappPhoneID == "" {
+			whatsappPhoneID = savedCfg.Platforms.WhatsApp.PhoneNumberID
+		}
+		if whatsappAccessToken == "" {
+			whatsappAccessToken = savedCfg.Platforms.WhatsApp.AccessToken
+		}
+		if whatsappVerifyToken == "" {
+			whatsappVerifyToken = savedCfg.Platforms.WhatsApp.VerifyToken
 		}
 	}
 
@@ -387,6 +412,22 @@ func runRouter(cmd *cobra.Command, args []string) {
 		r.Register(dingtalkPlatform)
 	} else {
 		logger.Info("DingTalk tokens not provided, skipping DingTalk integration")
+	}
+
+	// Register WhatsApp if tokens are provided
+	if whatsappPhoneID != "" && whatsappAccessToken != "" {
+		whatsappPlatform, err := whatsapp.New(whatsapp.Config{
+			PhoneNumberID: whatsappPhoneID,
+			AccessToken:   whatsappAccessToken,
+			VerifyToken:   whatsappVerifyToken,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating WhatsApp platform: %v\n", err)
+			os.Exit(1)
+		}
+		r.Register(whatsappPlatform)
+	} else {
+		logger.Info("WhatsApp tokens not provided, skipping WhatsApp integration")
 	}
 
 	// Start the router

@@ -50,6 +50,7 @@ type PlatformConfig struct {
 	Discord  DiscordConfig  `yaml:"discord,omitempty"`
 	Feishu   FeishuConfig   `yaml:"feishu,omitempty"`
 	DingTalk DingTalkConfig `yaml:"dingtalk,omitempty"`
+	WhatsApp WhatsAppConfig `yaml:"whatsapp,omitempty"`
 }
 
 type WeComConfig struct {
@@ -82,6 +83,12 @@ type FeishuConfig struct {
 type DingTalkConfig struct {
 	ClientID     string `yaml:"client_id,omitempty"`
 	ClientSecret string `yaml:"client_secret,omitempty"`
+}
+
+type WhatsAppConfig struct {
+	PhoneNumberID string `yaml:"phone_number_id,omitempty"`
+	AccessToken   string `yaml:"access_token,omitempty"`
+	VerifyToken   string `yaml:"verify_token,omitempty"`
 }
 
 type SecurityConfig struct {
