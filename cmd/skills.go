@@ -66,6 +66,13 @@ var skillsDisableCmd = &cobra.Command{
 	Run:   runSkillsDisable,
 }
 
+var skillsDownloadCmd = &cobra.Command{
+	Use:   "download",
+	Short: "Download bundled skills from GitHub",
+	Long:  `Download the latest bundled skills from the lingti-bot GitHub repository into ~/.lingti/skills/.`,
+	Run:   runSkillsDownload,
+}
+
 func init() {
 	rootCmd.AddCommand(skillsCmd)
 
@@ -75,6 +82,7 @@ func init() {
 	skillsCmd.AddCommand(skillsCheckCmd)
 	skillsCmd.AddCommand(skillsEnableCmd)
 	skillsCmd.AddCommand(skillsDisableCmd)
+	skillsCmd.AddCommand(skillsDownloadCmd)
 
 	// Flags shared across subcommands
 	for _, cmd := range []*cobra.Command{skillsCmd, skillsListCmd, skillsInfoCmd, skillsCheckCmd} {
@@ -113,6 +121,16 @@ func runSkillsCheck(_ *cobra.Command, _ []string) {
 	disabled, extraDirs := loadSkillsConfig()
 	report := skills.BuildStatusReport(disabled, extraDirs)
 	fmt.Println(skills.FormatCheck(report, skillsJSON))
+}
+
+func runSkillsDownload(_ *cobra.Command, _ []string) {
+	fmt.Println("Downloading bundled skills from GitHub...")
+	count, err := skills.DownloadBundledSkills("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Downloaded %d skills to %s\n", count, config.SkillsDir())
 }
 
 func runSkillsEnable(_ *cobra.Command, args []string) {

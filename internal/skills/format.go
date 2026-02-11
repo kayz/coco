@@ -43,7 +43,8 @@ func FormatList(report StatusReport, opts FormatListOptions) string {
 		}
 		return "No skills found.\n\nSkills are loaded from:\n" +
 			fmt.Sprintf("  Managed:   %s\n", ShortenHomePath(report.ManagedDir)) +
-			fmt.Sprintf("  Workspace: %s\n", ShortenHomePath(report.WorkspaceDir))
+			fmt.Sprintf("  Workspace: %s\n", ShortenHomePath(report.WorkspaceDir)) +
+			"\nRun `lingti-bot skills download` to download bundled skills from GitHub."
 	}
 
 	eligible, _, _ := report.CountByStatus()
