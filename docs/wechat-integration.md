@@ -44,10 +44,10 @@ lingti-bot relay \
 | `--model` | AI 模型名称 | `MiniMax-M2.1`、`deepseek-chat`、`claude-3-5-sonnet` |
 | `--api-key` | 模型 API 密钥 | 从模型提供商获取 |
 | `--base-url` | API 端点 | 见下方示例 |
-| `--wechat-app-id` | 公众号 AppID（文件发送需要） | `wx1234567890` |
-| `--wechat-app-secret` | 公众号 AppSecret（文件发送需要） | 从公众平台获取 |
+| `--wechat-app-id` | 公众号 AppID（可选，文件直传优化） | `wx1234567890` |
+| `--wechat-app-secret` | 公众号 AppSecret（可选，文件直传优化） | 从公众平台获取 |
 
-> **发送文件/图片**：纯文本对话无需这两个参数。但如果需要 AI 发送图片、语音、视频等文件，则必须配置 `--wechat-app-id` 和 `--wechat-app-secret`。这是因为文件发送使用的是微信[客服接口（主动发送）](https://developers.weixin.qq.com/doc/offiaccount/Message_Management/Service_Center_messages.html)而非被动回复，需要用你自己的公众号/服务号凭据获取 access_token。此外，公众号仅支持发送图片/语音/视频，不支持任意文件附件（与企业微信不同）。详见 [文件发送指南](file-sending.md)。
+> **发送文件/图片**：默认即可发送图片、语音、视频，文件通过云中继服务器中转上传到微信。如果你拥有自己的公众号/服务号，可配置 `--wechat-app-id` 和 `--wechat-app-secret` 启用客户端直传模式（更快、文件不经过中转）。公众号仅支持图片/语音/视频，不支持任意文件附件（与企业微信不同），其他类型文件会以文本预览发送。详见 [文件发送指南](file-sending.md)。
 
 ### 第四步：开始对话
 
