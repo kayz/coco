@@ -381,7 +381,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 - file_list_old: Find old files not modified for N days
 
 ### Calendar (macOS)
-- calendar_today: Get today's events
+- calendar_today: List today's calendar events/meetings (NOT for answering date/time questions)
 - calendar_list_events: List upcoming events
 - calendar_create_event: Create new event
 - calendar_search: Search events

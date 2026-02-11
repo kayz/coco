@@ -283,7 +283,7 @@ func registerCalendarTools(s *Server) {
 
 	// calendar_today
 	s.addTool(mcp.NewTool("calendar_today",
-		mcp.WithDescription("Get today's agenda - all events scheduled for today"),
+		mcp.WithDescription("List calendar events/meetings scheduled for today. Only use when the user asks about their schedule, agenda, or appointments — NOT for asking the current date/time"),
 	), tools.CalendarToday)
 
 	// calendar_search
