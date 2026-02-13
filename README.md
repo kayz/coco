@@ -615,6 +615,7 @@ lingti-bot relay --provider openai --api-key "sk-xxx" --model "gpt-4o-mini"
 
 ### 详细文档
 
+- [配置优先级](CONFIGURATION.md) - 命令行参数 > 环境变量 > 配置文件的解析机制
 - [AI 服务列表](docs/ai-providers.md) - 15 种 AI 服务详情、API Key 获取、别名
 - [聊天平台列表](docs/chat-platforms.md) - 19 种聊天平台详情、配置参数、环境变量
 - [命令行参考](docs/cli-reference.md) - 完整的命令行使用文档
@@ -1187,19 +1188,16 @@ lingti-bot --debug router --provider deepseek --api-key sk-xxx
 
 ---
 
-## 环境变量
+## 配置优先级
 
-| 变量 | 说明 | 必需 |
-|------|------|------|
-| `ANTHROPIC_API_KEY` | Anthropic API 密钥 | 路由器模式必需 |
-| `ANTHROPIC_BASE_URL` | 自定义 API 地址 | 可选 |
-| `ANTHROPIC_MODEL` | 使用的模型 | 可选 |
-| `SLACK_BOT_TOKEN` | Slack Bot Token (`xoxb-...`) | Slack 集成必需 |
-| `SLACK_APP_TOKEN` | Slack App Token (`xapp-...`) | Slack 集成必需 |
-| `FEISHU_APP_ID` | 飞书 App ID | 飞书集成必需 |
-| `FEISHU_APP_SECRET` | 飞书 App Secret | 飞书集成必需 |
-| `DINGTALK_CLIENT_ID` | 钉钉 AppKey | 钉钉集成必需 |
-| `DINGTALK_CLIENT_SECRET` | 钉钉 AppSecret | 钉钉集成必需 |
+所有配置项按以下优先级解析：**命令行参数 > 环境变量 > 配置文件 (`~/.lingti.yaml`)**
+
+```bash
+# 配置文件已保存 provider: qwen，但命令行覆盖为 deepseek
+lingti-bot relay --provider deepseek
+```
+
+完整的环境变量、命令行参数、配置文件对照表请参考：[配置优先级](CONFIGURATION.md)
 
 ---
 
