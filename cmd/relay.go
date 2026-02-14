@@ -22,10 +22,11 @@ var (
 	relayPlatform   string
 	relayServerURL  string
 	relayWebhookURL string
-	relayAIProvider string
-	relayAPIKey     string
-	relayBaseURL    string
-	relayModel      string
+	relayAIProvider    string
+	relayAPIKey        string
+	relayBaseURL       string
+	relayModel         string
+	relayInstructions  string
 	// WeCom credentials for cloud relay
 	relayWeComCorpID  string
 	relayWeComAgentID string
@@ -106,6 +107,7 @@ func init() {
 	relayCmd.Flags().StringVar(&relayAPIKey, "api-key", "", "AI API key (or AI_API_KEY env)")
 	relayCmd.Flags().StringVar(&relayBaseURL, "base-url", "", "Custom API base URL (or AI_BASE_URL env)")
 	relayCmd.Flags().StringVar(&relayModel, "model", "", "Model name (or AI_MODEL env)")
+	relayCmd.Flags().StringVar(&relayInstructions, "instructions", "", "Path to custom instructions file appended to system prompt")
 
 	// WeCom credentials for cloud relay
 	relayCmd.Flags().StringVar(&relayWeComCorpID, "wecom-corp-id", "", "WeCom Corp ID (or WECOM_CORP_ID env)")
@@ -284,12 +286,25 @@ func runRelay(cmd *cobra.Command, args []string) {
 		}
 	}
 
+	// Load custom instructions if specified
+	var customInstructions string
+	if relayInstructions != "" {
+		data, err := os.ReadFile(relayInstructions)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading instructions file: %v\n", err)
+			os.Exit(1)
+		}
+		customInstructions = string(data)
+		log.Printf("Loaded custom instructions from %s (%d bytes)", relayInstructions, len(data))
+	}
+
 	// Create the AI agent
 	aiAgent, err := agent.New(agent.Config{
-		Provider: relayAIProvider,
-		APIKey:   relayAPIKey,
-		BaseURL:  relayBaseURL,
-		Model:    relayModel,
+		Provider:           relayAIProvider,
+		APIKey:             relayAPIKey,
+		BaseURL:            relayBaseURL,
+		Model:              relayModel,
+		CustomInstructions: customInstructions,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating agent: %v\n", err)

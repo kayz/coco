@@ -92,6 +92,7 @@ browser:
 | `AI_API_KEY` | `--api-key` | API 密钥 |
 | `AI_BASE_URL` | `--base-url` | 自定义 API 地址 |
 | `AI_MODEL` | `--model` | 模型名称 |
+| - | `--instructions` | 自定义指令文件路径（追加到系统提示词） |
 | `ANTHROPIC_API_KEY` | `--api-key` | API 密钥（fallback） |
 | `ANTHROPIC_BASE_URL` | `--base-url` | API 地址（fallback） |
 | `ANTHROPIC_MODEL` | `--model` | 模型名称（fallback） |

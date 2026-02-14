@@ -18,22 +18,24 @@ import (
 
 // Agent processes messages using AI providers and tools
 type Agent struct {
-	provider      Provider
-	memory        *ConversationMemory
-	sessions      *SessionStore
-	autoApprove   bool
-	cronScheduler *cronpkg.Scheduler
-	currentMsg       router.Message // set during HandleMessage for cron_create context
-	cronCreatedCount int            // tracks cron_create calls per HandleMessage turn
+	provider           Provider
+	memory             *ConversationMemory
+	sessions           *SessionStore
+	autoApprove        bool
+	customInstructions string
+	cronScheduler      *cronpkg.Scheduler
+	currentMsg         router.Message // set during HandleMessage for cron_create context
+	cronCreatedCount   int            // tracks cron_create calls per HandleMessage turn
 }
 
 // Config holds agent configuration
 type Config struct {
-	Provider    string // "claude" or "deepseek" (default: "claude")
-	APIKey      string
-	BaseURL     string // Custom API base URL (optional)
-	Model       string // Model name (optional, uses provider default)
-	AutoApprove bool   // Skip all confirmation prompts (default: false)
+	Provider           string // "claude" or "deepseek" (default: "claude")
+	APIKey             string
+	BaseURL            string // Custom API base URL (optional)
+	Model              string // Model name (optional, uses provider default)
+	AutoApprove        bool   // Skip all confirmation prompts (default: false)
+	CustomInstructions string // Additional instructions appended to system prompt (optional)
 }
 
 // New creates a new Agent with the specified provider
@@ -48,10 +50,11 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	return &Agent{
-		provider:    provider,
-		memory:      NewMemory(50, 60*time.Minute), // Keep 50 messages, 60 min TTL
-		sessions:    NewSessionStore(),
-		autoApprove: cfg.AutoApprove,
+		provider:           provider,
+		memory:             NewMemory(50, 60*time.Minute), // Keep 50 messages, 60 min TTL
+		sessions:           NewSessionStore(),
+		autoApprove:        cfg.AutoApprove,
+		customInstructions: cfg.CustomInstructions,
 	}, nil
 }
 
@@ -487,6 +490,10 @@ Do NOT waste rounds — try clicking first, inspect only if it fails.
    - NEVER call cron_create multiple times. NEVER use shell_execute or file_write for cron tasks.
 
 Current date: %s%s%s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, homeDir, homeDir, homeDir, homeDir, msg.Username, time.Now().Format("2006-01-02"), thinkingPrompt, formatSkillsSection())
+
+	if a.customInstructions != "" {
+		systemPrompt += "\n\n## Custom Instructions\n" + a.customInstructions
+	}
 
 	// Call AI provider
 	resp, err := a.provider.Chat(ctx, ChatRequest{

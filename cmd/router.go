@@ -87,6 +87,7 @@ var (
 	aiAPIKey             string
 	aiBaseURL            string
 	aiModel              string
+	aiInstructions       string
 	voiceSTTProvider     string
 	voiceSTTAPIKey       string
 	browserDebugDir      string
@@ -171,6 +172,7 @@ func init() {
 	routerCmd.Flags().StringVar(&aiAPIKey, "api-key", "", "AI API Key (or AI_API_KEY env)")
 	routerCmd.Flags().StringVar(&aiBaseURL, "base-url", "", "Custom API base URL (or AI_BASE_URL env)")
 	routerCmd.Flags().StringVar(&aiModel, "model", "", "Model name (or AI_MODEL env)")
+	routerCmd.Flags().StringVar(&aiInstructions, "instructions", "", "Path to custom instructions file appended to system prompt")
 	routerCmd.Flags().StringVar(&voiceSTTProvider, "voice-stt-provider", "", "Voice STT provider: system, openai (or VOICE_STT_PROVIDER env)")
 	routerCmd.Flags().StringVar(&voiceSTTAPIKey, "voice-stt-api-key", "", "Voice STT API key (or VOICE_STT_API_KEY env)")
 	routerCmd.Flags().StringVar(&browserDebugDir, "debug-dir", "", "Directory for debug screenshots (or BROWSER_DEBUG_DIR env, default: /tmp/lingti-bot on Unix)")
@@ -524,13 +526,26 @@ func runRouter(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Load custom instructions if specified
+	var customInstructions string
+	if aiInstructions != "" {
+		data, err := os.ReadFile(aiInstructions)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading instructions file: %v\n", err)
+			os.Exit(1)
+		}
+		customInstructions = string(data)
+		logger.Info("Loaded custom instructions from %s (%d bytes)", aiInstructions, len(data))
+	}
+
 	// Create the AI agent
 	aiAgent, err := agent.New(agent.Config{
-		Provider:    aiProvider,
-		APIKey:      aiAPIKey,
-		BaseURL:     aiBaseURL,
-		Model:       aiModel,
-		AutoApprove: IsAutoApprove(),
+		Provider:           aiProvider,
+		APIKey:             aiAPIKey,
+		BaseURL:            aiBaseURL,
+		Model:              aiModel,
+		AutoApprove:        IsAutoApprove(),
+		CustomInstructions: customInstructions,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating agent: %v\n", err)

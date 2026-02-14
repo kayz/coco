@@ -108,6 +108,7 @@ lingti-bot router [flags]
 | `--api-key` | `AI_API_KEY` | | AI API key (required) |
 | `--base-url` | `AI_BASE_URL` | | Custom AI API base URL |
 | `--model` | `AI_MODEL` | auto | Model name |
+| `--instructions` | | | Path to custom instructions file (appended to system prompt) |
 | `--slack-bot-token` | `SLACK_BOT_TOKEN` | | Slack bot token (xoxb-...) |
 | `--slack-app-token` | `SLACK_APP_TOKEN` | | Slack app token (xapp-...) |
 | `--telegram-token` | `TELEGRAM_BOT_TOKEN` | | Telegram bot token |
