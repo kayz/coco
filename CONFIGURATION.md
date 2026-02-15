@@ -80,6 +80,47 @@ platforms:
 
 browser:
   screen_size: fullscreen  # "fullscreen" 或 "宽x高"（如 "1024x768"），默认 fullscreen
+
+security:
+  allowed_paths:             # 限制文件操作的目录白名单（空=不限制）
+    - ~/Documents
+    - ~/Downloads
+  blocked_commands:          # 禁止执行的命令前缀
+    - "rm -rf /"
+    - "mkfs"
+    - "dd if="
+  require_confirmation: []   # 需要用户确认的命令（预留）
+```
+
+## 安全配置
+
+通过 `security` 配置项限制 bot 的文件系统访问和命令执行范围。
+
+### allowed_paths — 目录白名单
+
+限制 `file_read`、`file_write`、`file_list`、`file_trash` 和 `shell_execute` 只能访问指定目录：
+
+```yaml
+security:
+  allowed_paths:
+    - ~/Documents/work
+    - ~/Downloads
+```
+
+- 空列表 `[]`（默认）= 不限制，可访问所有路径
+- 设置后，所有文件操作必须在白名单目录内，否则返回权限错误
+- 路径支持 `~` 展开为用户 home 目录
+
+### blocked_commands — 命令黑名单
+
+阻止 `shell_execute` 执行包含指定前缀的命令：
+
+```yaml
+security:
+  blocked_commands:
+    - "rm -rf /"
+    - "mkfs"
+    - "dd if="
 ```
 
 ## 环境变量
