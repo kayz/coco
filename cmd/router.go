@@ -546,6 +546,7 @@ func runRouter(cmd *cobra.Command, args []string) {
 		Model:              aiModel,
 		AutoApprove:        IsAutoApprove(),
 		CustomInstructions: customInstructions,
+		AllowedPaths:       loadAllowedPaths(),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating agent: %v\n", err)

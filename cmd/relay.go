@@ -305,6 +305,7 @@ func runRelay(cmd *cobra.Command, args []string) {
 		BaseURL:            relayBaseURL,
 		Model:              relayModel,
 		CustomInstructions: customInstructions,
+		AllowedPaths:       loadAllowedPaths(),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating agent: %v\n", err)

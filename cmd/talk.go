@@ -106,10 +106,11 @@ func runTalk(cmd *cobra.Command, args []string) {
 
 	// Create the AI agent
 	aiAgent, err := agent.New(agent.Config{
-		Provider: aiProvider,
-		APIKey:   aiAPIKey,
-		BaseURL:  aiBaseURL,
-		Model:    aiModel,
+		Provider:     aiProvider,
+		APIKey:       aiAPIKey,
+		BaseURL:      aiBaseURL,
+		Model:        aiModel,
+		AllowedPaths: loadAllowedPaths(),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating agent: %v\n", err)

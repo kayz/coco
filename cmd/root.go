@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/pltanton/lingti-bot/internal/config"
 	"github.com/pltanton/lingti-bot/internal/logger"
 	"github.com/spf13/cobra"
 )
@@ -46,6 +47,14 @@ func init() {
 // IsAutoApprove returns true if auto-approve mode is enabled globally
 func IsAutoApprove() bool {
 	return autoApprove
+}
+
+// loadAllowedPaths returns security allowed_paths from config file.
+func loadAllowedPaths() []string {
+	if cfg, err := config.Load(); err == nil {
+		return cfg.Security.AllowedPaths
+	}
+	return nil
 }
 
 func Execute() {

@@ -10,6 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	cronpkg "github.com/pltanton/lingti-bot/internal/cron"
+	"github.com/pltanton/lingti-bot/internal/security"
 	"github.com/pltanton/lingti-bot/internal/tools"
 )
 
@@ -26,10 +27,15 @@ type Server struct {
 	mcpServer     *server.MCPServer
 	cronScheduler *cronpkg.Scheduler
 	toolHandlers  map[string]ToolHandler
+	pathChecker   *security.PathChecker
 }
 
 // NewServer creates a new MCP server with all tools registered
-func NewServer() *Server {
+func NewServer(allowedPaths ...[]string) *Server {
+	var paths []string
+	if len(allowedPaths) > 0 {
+		paths = allowedPaths[0]
+	}
 	s := &Server{
 		mcpServer: server.NewMCPServer(ServerName, ServerVersion,
 			server.WithResourceCapabilities(true, true),
@@ -37,6 +43,7 @@ func NewServer() *Server {
 			server.WithToolCapabilities(true),
 		),
 		toolHandlers: make(map[string]ToolHandler),
+		pathChecker:  security.NewPathChecker(paths),
 	}
 
 	// Register all tools
@@ -131,12 +138,44 @@ func (s *Server) NotifyChatUser(platform, channelID, userID, message string) err
 	return nil
 }
 
+// pathCheckedTools maps tool names to the argument key containing a file path.
+var pathCheckedTools = map[string]string{
+	"file_read":     "path",
+	"file_write":    "path",
+	"file_list":     "path",
+	"file_search":   "path",
+	"file_info":     "path",
+	"file_trash":    "path",
+	"file_list_old": "path",
+}
+
 // addTool is a helper to add a tool and track its handler
 func (s *Server) addTool(tool mcp.Tool, handler ToolHandler) {
+	wrappedHandler := handler
+	if pathKey, ok := pathCheckedTools[tool.Name]; ok {
+		wrappedHandler = s.wrapPathCheck(pathKey, handler)
+	} else if tool.Name == "shell_execute" {
+		wrappedHandler = s.wrapPathCheck("working_directory", handler)
+	}
 	s.mcpServer.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		return handler(ctx, req)
+		return wrappedHandler(ctx, req)
 	})
 	s.toolHandlers[tool.Name] = handler
+}
+
+func (s *Server) wrapPathCheck(argKey string, handler ToolHandler) ToolHandler {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if s.pathChecker.HasRestrictions() {
+			path := "."
+			if p, ok := req.Params.Arguments[argKey].(string); ok && p != "" {
+				path = p
+			}
+			if err := s.pathChecker.CheckPath(path); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+		}
+		return handler(ctx, req)
+	}
 }
 
 func registerFilesystemTools(s *Server) {

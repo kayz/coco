@@ -13,6 +13,7 @@ import (
 	cronpkg "github.com/pltanton/lingti-bot/internal/cron"
 	"github.com/pltanton/lingti-bot/internal/logger"
 	"github.com/pltanton/lingti-bot/internal/router"
+	"github.com/pltanton/lingti-bot/internal/security"
 	"github.com/pltanton/lingti-bot/internal/skills"
 )
 
@@ -26,6 +27,7 @@ type Agent struct {
 	cronScheduler      *cronpkg.Scheduler
 	currentMsg         router.Message // set during HandleMessage for cron_create context
 	cronCreatedCount   int            // tracks cron_create calls per HandleMessage turn
+	pathChecker        *security.PathChecker
 }
 
 // Config holds agent configuration
@@ -34,8 +36,9 @@ type Config struct {
 	APIKey             string
 	BaseURL            string // Custom API base URL (optional)
 	Model              string // Model name (optional, uses provider default)
-	AutoApprove        bool   // Skip all confirmation prompts (default: false)
-	CustomInstructions string // Additional instructions appended to system prompt (optional)
+	AutoApprove        bool     // Skip all confirmation prompts (default: false)
+	CustomInstructions string   // Additional instructions appended to system prompt (optional)
+	AllowedPaths       []string // Restrict file/shell operations to these directories (empty = no restriction)
 }
 
 // New creates a new Agent with the specified provider
@@ -55,6 +58,7 @@ func New(cfg Config) (*Agent, error) {
 		sessions:           NewSessionStore(),
 		autoApprove:        cfg.AutoApprove,
 		customInstructions: cfg.CustomInstructions,
+		pathChecker:        security.NewPathChecker(cfg.AllowedPaths),
 	}, nil
 }
 
@@ -1288,6 +1292,13 @@ func (a *Agent) executeTool(ctx context.Context, name string, input json.RawMess
 		return a.executeCronResume(args)
 	}
 
+	// Enforce allowed_paths restrictions
+	if a.pathChecker.HasRestrictions() {
+		if err := a.checkToolPathAccess(name, args); err != nil {
+			return err.Error()
+		}
+	}
+
 	// Call tools directly
 	result := callToolDirect(ctx, name, args)
 
@@ -1299,6 +1310,34 @@ func (a *Agent) executeTool(ctx context.Context, name string, input json.RawMess
 	}
 
 	return result
+}
+
+// fileToolPaths maps tool names to the argument key that contains the path.
+var fileToolPaths = map[string]string{
+	"file_list":     "path",
+	"file_list_old": "path",
+	"file_read":     "path",
+	"file_write":    "path",
+	"file_trash":    "path",
+	"file_search":   "path",
+	"file_info":     "path",
+}
+
+// checkToolPathAccess validates that tool arguments respect allowed_paths.
+func (a *Agent) checkToolPathAccess(name string, args map[string]any) error {
+	if pathKey, ok := fileToolPaths[name]; ok {
+		path := "."
+		if p, ok := args[pathKey].(string); ok && p != "" {
+			path = p
+		}
+		return a.pathChecker.CheckPath(path)
+	}
+	if name == "shell_execute" {
+		if wd, ok := args["working_directory"].(string); ok && wd != "" {
+			return a.pathChecker.CheckPath(wd)
+		}
+	}
+	return nil
 }
 
 // callToolDirect calls a tool directly
