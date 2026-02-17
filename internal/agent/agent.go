@@ -81,6 +81,7 @@ var openaiCompatProviders = map[string]struct {
 	"grok":       {"https://api.x.ai/v1", "grok-2-latest"},
 	"baichuan":   {"https://api.baichuan-ai.com/v1", "Baichuan4"},
 	"spark":      {"https://spark-api-open.xf-yun.com/v1", "generalv3.5"},
+	"hunyuan":    {"https://api.hunyuan.cloud.tencent.com/v1", "hunyuan-turbos-latest"},
 }
 
 // openaiCompatAliases maps alternative names to canonical provider names.
@@ -97,6 +98,8 @@ var openaiCompatAliases = map[string]string{
 	"volcengine":   "doubao",
 	"iflytek":      "spark",
 	"xunfei":       "spark",
+	"tencent":      "hunyuan",
+	"hungyuan":     "hunyuan",
 }
 
 // createProvider creates the appropriate AI provider based on config
@@ -144,7 +147,7 @@ func createProvider(cfg Config) (Provider, error) {
 				DefaultModel: defaults.model,
 			})
 		}
-		return nil, fmt.Errorf("unknown provider: %s (supported: claude, deepseek, kimi, qwen, minimax, doubao, zhipu, openai, gemini, yi, stepfun, siliconflow, grok, baichuan, spark)", cfg.Provider)
+		return nil, fmt.Errorf("unknown provider: %s (supported: claude, deepseek, kimi, qwen, minimax, doubao, zhipu, openai, gemini, yi, stepfun, siliconflow, grok, baichuan, spark, hunyuan)", cfg.Provider)
 	}
 }
 
