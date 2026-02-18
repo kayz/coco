@@ -14,7 +14,7 @@
 
 **核心优势：**
 - 🚀 **零依赖部署** — 单个 30MB 二进制文件，无需 Node.js/Python 运行时，**一行命令**安装即用
-- ☁️ **云中继加持** — 无需公网服务器、域名备案、HTTPS 证书，5 分钟接入企业微信/微信公众号
+- ☁️ **[云中继](docs/cloud-relay.md)加持** — 无需公网服务器、域名备案、HTTPS 证书，5 分钟接入企业微信/微信公众号
 - 🤖 **浏览器自动化** — 内置 CDP 协议控制，快照-操作模式，无需 Puppeteer/Playwright 安装
 - 🛠️ **75+ MCP 工具** — 覆盖文件、Shell、系统、网络、日历、Git、GitHub 等全场景
 - 🌏 **中国平台原生支持** — 钉钉、飞书、企业微信、微信公众号开箱即用
@@ -355,6 +355,8 @@ lingti-bot relay --platform wecom \
 | AI处理位置 | 服务器 | **本地** |
 | 数据安全 | 云端存储 | **本地处理** |
 
+> 📖 **深入了解云中继的架构原理、协议规范和完整消息流程，请阅读 [云中继技术方案详解](docs/cloud-relay.md)**
+>
 > 详细对比请参考：[lingti-bot vs OpenClaw：简化 AI 集成的努力](docs/vs-openclaw-integration.md)
 
 ### 微信公众号一键接入
@@ -387,7 +389,7 @@ lingti-bot relay --platform wecom \
 #    保存配置后验证自动完成，消息立即可以处理
 ```
 
-详细教程请参考：[企业微信集成指南](docs/wecom-integration.md)
+详细教程请参考：[企业微信集成指南](docs/wecom-integration.md) | [云中继技术方案详解](docs/cloud-relay.md)
 
 ### 钉钉接入
 
