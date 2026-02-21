@@ -23,14 +23,15 @@
 | macOS App | ✅ | ❌ |
 | iOS App | ✅ | ❌ |
 | Android App | ✅ | ❌ |
-| Browser Automation | ✅ | ❌ |
+| Browser Automation | ✅ | ✅ |
 | Skills System | ✅ | ❌ |
 | Plugin System | ✅ | ❌ |
 | Hooks System | ✅ | ❌ |
-| Memory/RAG | ✅ | ❌ |
+| Memory/RAG | ✅ | ✅ |
 | Terminal UI (TUI) | ✅ | ❌ |
 | Cloud Relay | ❌ | ✅ |
 | Single Binary | ❌ | ✅ |
+| Cron/Scheduling | ✅ | ✅ |
 
 ## Messaging Platforms
 
@@ -117,8 +118,15 @@ No skills system - tools are built into the MCP server.
   - Profile management
   - State observation
 
-### lingti-bot
-None
+### lingti-bot (`internal/agent/browser_*.go`)
+- Chrome DevTools Protocol (CDP) via go-rod
+- Features:
+  - Page navigation
+  - Element interaction (click, type)
+  - Screenshot capture
+  - Accessibility tree snapshot
+  - Tab management
+  - JavaScript execution
 
 ## Media Understanding
 
@@ -142,7 +150,13 @@ Basic screenshot tool only
 - Persistent knowledge across sessions
 
 ### lingti-bot
-In-memory session storage only (lost on restart)
+- `internal/agent/rag_memory.go` - RAG memory system
+- chromem-go vector database (embedded, zero dependency)
+- Qwen Embedding v3 integration
+- SQLite persistence (conversation memory, user preferences)
+- Automatic conversation save to RAG
+- Semantic search for relevant memories
+- User preference learning and extraction
 
 ## Hooks System
 
@@ -226,18 +240,30 @@ Single configuration file with basic settings
 - Makefile
 - Basic build scripts
 
-## Advanced Features in OpenClaw Only
+## Advanced Features
 
+### Both Projects
+| Feature | OpenClaw | lingti-bot |
+|---------|----------|------------|
+| Cron/Scheduling | ✅ `src/cron/` | ✅ `internal/cron/` |
+
+### OpenClaw Only
 | Feature | Location | Description |
 |---------|----------|-------------|
 | Auto-reply | `src/auto-reply/` | Automated response system |
-| Cron/Scheduling | `src/cron/` | Scheduled tasks |
 | Daemon Mode | `src/daemon/` | Background service |
 | Canvas Host | `src/canvas-host/` | Canvas rendering |
 | Device Pairing | `src/pairing/` | Multi-device sync |
 | Media Pipeline | `src/media/` | Media processing |
 | Security Module | `src/security/` | Security features |
 | Wizard | `src/wizard/` | Onboarding flow |
+
+### lingti-bot Only
+| Feature | Location | Description |
+|---------|----------|-------------|
+| Cloud Relay | `internal/relay/` | No public IP required, instant setup |
+| User Scheduling via Tags | `internal/cron/` | Tag-based separation: user-schedule vs assistant-task |
+| User Preference Learning | `internal/agent/agent.go` | Automatic preference extraction from conversations |
 
 ## MCP Tools Comparison
 
@@ -275,13 +301,18 @@ Additional tools in both (via agent):
 - Plugin architecture
 - Extensive infrastructure
 
-**lingti-bot** is a focused CLI messaging bot with:
+**lingti-bot** is a focused, lightweight personal AI assistant with:
 - Single Go binary
 - Cloud relay for easy setup
 - China platform focus (Feishu, WeChat, DingTalk)
 - Core MCP tools
 - Minimal dependencies
 - Fast deployment
+- ✅ **RAG memory system with chromem-go
+- ✅ **Browser automation via go-rod**
+- ✅ **Cron/scheduling system with tag support**
+- ✅ **User preference learning**
+- ✅ **User scheduling via cron tags (user-schedule vs assistant-task)
 
 ## Related Documents
 

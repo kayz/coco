@@ -89,10 +89,20 @@ func SkillsDir() string {
 }
 
 type AIConfig struct {
+	Provider string          `yaml:"provider,omitempty"`
+	APIKey   string          `yaml:"api_key,omitempty"`
+	BaseURL  string          `yaml:"base_url,omitempty"`
+	Model    string          `yaml:"model,omitempty"`
+	Models   []ModelConfig   `yaml:"models,omitempty"`
+}
+
+type ModelConfig struct {
 	Provider string `yaml:"provider,omitempty"`
 	APIKey   string `yaml:"api_key,omitempty"`
 	BaseURL  string `yaml:"base_url,omitempty"`
 	Model    string `yaml:"model,omitempty"`
+	Priority int    `yaml:"priority,omitempty"`
+	Enabled  bool   `yaml:"enabled,omitempty"`
 }
 
 type EmbeddingConfig struct {

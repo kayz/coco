@@ -45,10 +45,25 @@ lingti-bot onboard
 mode: relay  # "relay" 或 "router"
 
 ai:
-  provider: deepseek
+  provider: deepseek  # 单个模型配置（向后兼容）
   api_key: sk-xxx
-  base_url: ""       # 自定义 API 地址（可选）
-  model: ""          # 自定义模型名（可选，留空使用 provider 默认值）
+  base_url: ""        # 自定义 API 地址（可选）
+  model: ""           # 自定义模型名（可选，留空使用 provider 默认值）
+  
+  # 多模型配置（推荐，支持自动切换）
+  models:
+    - provider: claude
+      api_key: sk-ant-xxx
+      enabled: true
+      priority: 1
+    - provider: deepseek
+      api_key: sk-xxx
+      enabled: true
+      priority: 2
+    - provider: qwen
+      api_key: sk-xxx
+      enabled: true
+      priority: 3
 
 relay:
   platform: wecom    # "feishu", "slack", "wechat", "wecom"
@@ -196,6 +211,57 @@ security:
 | `TAVILY_API_KEY` | `--tavily-api-key` | Tavily 搜索 API Key |
 | `SEARCH_ENGINE` | `--search-engine` | 主搜索引擎 |
 | `AUTO_SEARCH` | `--auto-search` | 自动搜索（true/false） |
+
+## 多模型配置
+
+lingti-bot 支持配置多个 AI 模型，当主模型不可用时会自动切换到备用模型，提高服务稳定性。
+
+### 配置说明
+
+| 字段 | 说明 | 示例 |
+|------|------|------|
+| `provider` | AI 提供商 | `claude`, `deepseek`, `qwen` |
+| `api_key` | API 密钥 | `sk-xxx` |
+| `base_url` | 自定义 API 地址（可选） | `https://api.example.com` |
+| `model` | 模型名称（可选） | `claude-sonnet-4-20250514` |
+| `enabled` | 是否启用 | `true` / `false` |
+| `priority` | 优先级（数字越小越优先） | `1`, `2`, `3` |
+
+### 工作原理
+
+1. 按 `priority` 排序尝试所有启用的模型
+2. 当前模型失败时自动尝试下一个
+3. 成功后记住当前模型，下次从这里开始
+4. 所有模型都失败时返回错误
+
+### 完整示例
+
+```yaml
+ai:
+  models:
+    - provider: claude
+      api_key: sk-ant-xxx
+      base_url: ""
+      model: claude-sonnet-4-20250514
+      enabled: true
+      priority: 1
+    - provider: deepseek
+      api_key: sk-xxx
+      base_url: ""
+      model: deepseek-chat
+      enabled: true
+      priority: 2
+    - provider: qwen
+      api_key: sk-xxx
+      base_url: ""
+      model: qwen-plus
+      enabled: true
+      priority: 3
+```
+
+### 向后兼容
+
+如果只配置了单个模型（`provider`, `api_key` 等），系统会自动将其作为唯一模型使用，保持完全兼容。
 
 ## 搜索引擎
 

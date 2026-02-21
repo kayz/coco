@@ -543,8 +543,10 @@ func runRouter(cmd *cobra.Command, args []string) {
 	}
 
 	var embeddingCfg config.EmbeddingConfig
+	var modelCfgs []config.ModelConfig
 	if savedCfg, err := config.Load(); err == nil {
 		embeddingCfg = savedCfg.Embedding
+		modelCfgs = savedCfg.AI.Models
 	}
 
 	// Create the AI agent
@@ -558,6 +560,7 @@ func runRouter(cmd *cobra.Command, args []string) {
 		AllowedPaths:       loadAllowedPaths(),
 		DisableFileTools:   loadDisableFileTools(),
 		Embedding:          embeddingCfg,
+		Models:             modelCfgs,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating agent: %v\n", err)

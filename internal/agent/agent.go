@@ -47,7 +47,8 @@ func getExecutableDir() string {
 
 // Agent processes messages using AI providers and tools
 type Agent struct {
-	provider           Provider
+	providers          []Provider
+	currentProvider    int
 	memory             *ConversationMemory
 	ragMemory          *RAGMemory
 	sessions           *SessionStore
@@ -77,6 +78,7 @@ type Config struct {
 	AllowedPaths       []string // Restrict file/shell operations to these directories (empty = no restriction)
 	DisableFileTools   bool     // Completely disable all file operation tools
 	Embedding          config.EmbeddingConfig
+	Models             []config.ModelConfig
 }
 
 // loadPromptFile reads a prompt file from the project root
@@ -108,15 +110,78 @@ func ConversationKey(platform, channelID, userID string) string {
 	return platform + ":" + channelID + ":" + userID
 }
 
+func (a *Agent) chatWithFailover(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	var lastErr error
+	count := len(a.providers)
+	if count == 0 {
+		return ChatResponse{}, fmt.Errorf("no providers available")
+	}
+	indices := make([]int, count)
+	for k := range indices {
+		indices[k] = (a.currentProvider + k) % count
+	}
+	for _, idx := range indices {
+		provider := a.providers[idx]
+		logger.Debug("[AGENT] Trying provider: %s (index %d)", provider.Name(), idx)
+		resp, err := provider.Chat(ctx, req)
+		if err == nil {
+			if idx != a.currentProvider {
+				logger.Info("[AGENT] Switched to provider: %s", provider.Name())
+				a.currentProvider = idx
+			}
+			return resp, nil
+		}
+		logger.Warn("[AGENT] Provider %s failed: %v", provider.Name(), err)
+		lastErr = err
+	}
+	return ChatResponse{}, fmt.Errorf("all providers failed, last error: %w", lastErr)
+}
+
+func (a *Agent) currentProviderName() string {
+	if len(a.providers) == 0 {
+		return "unknown"
+	}
+	return a.providers[a.currentProvider].Name()
+}
+
 // New creates a new Agent with the specified provider
 func New(cfg Config) (*Agent, error) {
-	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("API key is required")
+	var providers []Provider
+
+	for _, m := range cfg.Models {
+		if m.APIKey == "" {
+			continue
+		}
+		if m.Enabled == false {
+			continue
+		}
+		p, err := createProvider(Config{
+			Provider: m.Provider,
+			APIKey:   m.APIKey,
+			BaseURL:  m.BaseURL,
+			Model:    m.Model,
+		})
+		if err != nil {
+			log.Printf("[AGENT] Failed to create provider %s: %v", m.Provider, err)
+			continue
+		}
+		providers = append(providers, p)
+		log.Printf("[AGENT] Added provider: %s", p.Name())
 	}
 
-	provider, err := createProvider(cfg)
-	if err != nil {
-		return nil, err
+	if len(providers) == 0 {
+		if cfg.APIKey == "" {
+			return nil, fmt.Errorf("API key is required")
+		}
+		p, err := createProvider(cfg)
+		if err != nil {
+			return nil, err
+		}
+		providers = append(providers, p)
+	}
+
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("no valid providers configured")
 	}
 
 	exeDir := getExecutableDir()
@@ -154,7 +219,8 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	agent := &Agent{
-		provider:           provider,
+		providers:          providers,
+		currentProvider:    0,
 		memory:             memory,
 		ragMemory:          ragMemory,
 		sessions:           NewSessionStore(),
@@ -398,12 +464,12 @@ func (a *Agent) handleBuiltinCommand(msg router.Message) (router.Response, bool)
 - 详细模式: %v
 - AI 模型: %s`,
 				msg.Platform, msg.Username, len(history),
-				settings.ThinkingLevel, settings.Verbose, a.provider.Name()),
+				settings.ThinkingLevel, settings.Verbose, a.currentProviderName()),
 		}, true
 
 	case "/model", "模型":
 		return router.Response{
-			Text: fmt.Sprintf("当前模型: %s", a.provider.Name()),
+			Text: fmt.Sprintf("当前模型: %s", a.currentProviderName()),
 		}, true
 
 	case "/tools", "工具", "工具列表":
@@ -548,7 +614,7 @@ func (a *Agent) ExecutePrompt(ctx context.Context, platform, channelID, userID, 
 func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.Response, error) {
 	a.currentMsg = msg
 	a.cronCreatedCount = 0
-	logger.Info("[Agent] Processing message from %s: %s (provider: %s)", msg.Username, msg.Text, a.provider.Name())
+	logger.Info("[Agent] Processing message from %s: %s (provider: %s)", msg.Username, msg.Text, a.currentProviderName())
 
 	// Handle built-in commands
 	if resp, handled := a.handleBuiltinCommand(msg); handled {
@@ -780,7 +846,7 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 	}
 
 	// Call AI provider
-	resp, err := a.provider.Chat(ctx, ChatRequest{
+	resp, err := a.chatWithFailover(ctx, ChatRequest{
 		Messages:     messages,
 		SystemPrompt: systemPrompt,
 		Tools:        tools,
@@ -833,7 +899,7 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 		}
 
 		// Continue the conversation
-		resp, err = a.provider.Chat(ctx, ChatRequest{
+		resp, err = a.chatWithFailover(ctx, ChatRequest{
 			Messages:     messages,
 			SystemPrompt: systemPrompt,
 			Tools:        tools,
@@ -2320,7 +2386,7 @@ Conversation:
 Extract ONLY the preferences, one per line, starting with "- ". Keep it concise and actionable.`, conversationText.String())
 
 	// Use AI to extract preferences
-	resp, err := a.provider.Chat(ctx, ChatRequest{
+	resp, err := a.chatWithFailover(ctx, ChatRequest{
 		Messages: []Message{
 			{Role: "user", Content: preferencePrompt},
 		},
