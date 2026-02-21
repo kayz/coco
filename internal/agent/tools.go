@@ -89,12 +89,9 @@ func executeFileSend(input json.RawMessage) (string, *router.FileAttachment) {
 		return "Error: path is required", nil
 	}
 
-	// Expand ~ to home directory
+	// Expand ~ to executable directory
 	path := args.Path
-	if strings.HasPrefix(path, "~/") {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, path[2:])
-	}
+	path = tools.ExpandTilde(path)
 
 	// Verify file exists and is not a directory
 	info, err := os.Stat(path)

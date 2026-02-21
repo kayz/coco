@@ -321,17 +321,21 @@ func downloadFile(url string, savePath string) error {
 	}
 	defer resp.Body.Close()
 
-	// Check if the response is an error JSON instead of binary data
-	contentType := resp.Header.Get("Content-Type")
-	if contentType == "application/json" || contentType == "text/plain" {
+	// Read first part of response to check if it's an error
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Check if response looks like JSON (starts with {)
+	if len(bodyBytes) > 0 && bodyBytes[0] == '{' {
 		var errResult struct {
 			ErrCode int    `json:"errcode"`
 			ErrMsg  string `json:"errmsg"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&errResult); err == nil && errResult.ErrCode != 0 {
+		if err := json.Unmarshal(bodyBytes, &errResult); err == nil && errResult.ErrCode != 0 {
 			return fmt.Errorf("download API error: %d - %s", errResult.ErrCode, errResult.ErrMsg)
 		}
-		return fmt.Errorf("unexpected response content-type: %s", contentType)
 	}
 
 	// Ensure parent directory exists
@@ -345,7 +349,7 @@ func downloadFile(url string, savePath string) error {
 	}
 	defer out.Close()
 
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	if _, err := out.Write(bodyBytes); err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
 	}
 

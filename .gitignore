@@ -30,6 +30,15 @@ Thumbs.db
 *.log
 dist
 .env
-.env
 *.local.json
-*.env
+
+# Lingti bot local files
+.lingti/
+.lingti.db
+.lingti.db-shm
+.lingti.db-wal
+.lingti.yaml
+ABOUTME.md
+SYSTEM.md
+Documents/
+ggml-base.bin

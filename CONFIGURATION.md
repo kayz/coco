@@ -81,6 +81,29 @@ platforms:
 browser:
   screen_size: fullscreen  # "fullscreen" 或 "宽x高"（如 "1024x768"），默认 fullscreen
 
+search:
+  primary_engine: metaso    # 主搜索引擎：metaso, tavily
+  secondary_engine: tavily  # 副搜索引擎
+  auto_search: true         # 自动搜索：当无法回答时自动搜索
+  engines:
+    - name: metaso
+      type: metaso
+      api_key: ""           # 秘塔搜索 API Key
+      enabled: true
+      priority: 1
+    - name: tavily
+      type: tavily
+      api_key: ""           # Tavily 搜索 API Key
+      enabled: true
+      priority: 2
+    # 自定义搜索引擎示例
+    # - name: myengine
+    #   type: custom_http
+    #   api_key: ""
+    #   base_url: "https://api.myengine.com"
+    #   enabled: true
+    #   priority: 3
+
 security:
   allowed_paths:             # 限制文件操作的目录白名单（空=不限制）
     - ~/Documents
@@ -164,6 +187,67 @@ security:
 | `FEISHU_APP_SECRET` | - | 飞书 App Secret |
 | `DINGTALK_CLIENT_ID` | - | 钉钉 Client ID |
 | `DINGTALK_CLIENT_SECRET` | - | 钉钉 Client Secret |
+
+### 搜索引擎配置
+
+| 环境变量 | 对应参数 | 说明 |
+|----------|----------|------|
+| `METASO_API_KEY` | `--metaso-api-key` | 秘塔搜索 API Key |
+| `TAVILY_API_KEY` | `--tavily-api-key` | Tavily 搜索 API Key |
+| `SEARCH_ENGINE` | `--search-engine` | 主搜索引擎 |
+| `AUTO_SEARCH` | `--auto-search` | 自动搜索（true/false） |
+
+## 搜索引擎
+
+项目支持多个搜索引擎，默认配置了 **秘塔搜索**（中文）和 **Tavily**（全球）。
+
+### 配置方式
+
+#### 1. 交互式配置（推荐）
+```bash
+lingti-bot onboard
+```
+向导会引导你完成搜索引擎配置（可选）。
+
+#### 2. 命令行参数
+```bash
+# 配置秘塔搜索
+lingti-bot --metaso-api-key=sk-xxx
+
+# 配置 Tavily
+lingti-bot --tavily-api-key=tvly-xxx
+
+# 同时配置多个引擎
+lingti-bot --metaso-api-key=sk-xxx --tavily-api-key=tvly-xxx --search-engine=metaso
+```
+
+#### 3. 手动编辑配置文件
+编辑 `~/.lingti.yaml` 文件中的 `search` 部分。
+
+### 搜索引擎说明
+
+| 引擎 | 说明 | 适用场景 |
+|------|------|----------|
+| **metaso** | 秘塔搜索 | 中文内容搜索，中国大陆访问稳定 |
+| **tavily** | Tavily 搜索 | 全球内容搜索，支持英文查询 |
+| **custom_http** | 自定义 HTTP 搜索引擎 | 支持添加任意搜索引擎 |
+
+### 搜索特性
+
+- **智能引擎选择**：英文查询自动使用 Tavily，中文查询自动使用秘塔
+- **多引擎搜索**：以"搜索"或"search"开头触发所有引擎搜索
+- **自动搜索**：当无法回答时自动搜索（可配置）
+
+### 使用示例
+
+```bash
+# 普通搜索（单引擎）
+web_search: { "query": "Go 语言入门" }
+
+# 多引擎综合搜索（触发词）
+web_search: { "query": "搜索 AI 最新进展" }
+web_search: { "query": "search latest AI news" }
+```
 
 ## 典型用法
 

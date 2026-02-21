@@ -22,6 +22,14 @@ type Message struct {
 	MediaID   string            // Media file ID (for file/image/voice/video messages)
 	FileName  string            // Original filename (for file messages)
 	Metadata  map[string]string // Platform-specific metadata
+	Attachments []Attachment    // Image/file attachments for multimodal
+}
+
+// Attachment represents a media attachment (image, file, etc.)
+type Attachment struct {
+	Type     string // "image", "file", etc.
+	Data     []byte // Base64 encoded data or raw bytes
+	MIMEType string // MIME type (e.g., "image/jpeg")
 }
 
 // FileAttachment represents a file to upload and send

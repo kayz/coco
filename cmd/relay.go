@@ -14,6 +14,8 @@ import (
 	cronpkg "github.com/pltanton/lingti-bot/internal/cron"
 	"github.com/pltanton/lingti-bot/internal/platforms/relay"
 	"github.com/pltanton/lingti-bot/internal/router"
+	"github.com/pltanton/lingti-bot/internal/tools"
+	"github.com/pltanton/lingti-bot/internal/voice"
 	"github.com/spf13/cobra"
 )
 
@@ -36,6 +38,9 @@ var (
 	// WeChat OA credentials
 	relayWeChatAppID     string
 	relayWeChatAppSecret string
+	// Voice STT provider
+	relayVoiceSTTProvider string
+	relayVoiceSTTAPIKey   string
 )
 
 var relayCmd = &cobra.Command{
@@ -119,6 +124,9 @@ func init() {
 	// WeChat OA credentials
 	relayCmd.Flags().StringVar(&relayWeChatAppID, "wechat-app-id", "", "WeChat OA App ID (or WECHAT_APP_ID env)")
 	relayCmd.Flags().StringVar(&relayWeChatAppSecret, "wechat-app-secret", "", "WeChat OA App Secret (or WECHAT_APP_SECRET env)")
+	// Voice STT parameters
+	relayCmd.Flags().StringVar(&relayVoiceSTTProvider, "voice-stt-provider", "", "Voice STT provider: system, openai (or VOICE_STT_PROVIDER env, default: system)")
+	relayCmd.Flags().StringVar(&relayVoiceSTTAPIKey, "voice-stt-api-key", "", "Voice STT API key (or VOICE_STT_API_KEY env)")
 }
 
 func runRelay(cmd *cobra.Command, args []string) {
@@ -134,6 +142,15 @@ func runRelay(cmd *cobra.Command, args []string) {
 	}
 	if relayWebhookURL == "" {
 		relayWebhookURL = os.Getenv("RELAY_WEBHOOK_URL")
+	}
+	// Check environment variable first, then use default
+	if envVal := os.Getenv("VOICE_STT_PROVIDER"); envVal != "" {
+		relayVoiceSTTProvider = envVal
+	} else if relayVoiceSTTProvider == "" {
+		relayVoiceSTTProvider = "system"
+	}
+	if relayVoiceSTTAPIKey == "" {
+		relayVoiceSTTAPIKey = os.Getenv("VOICE_STT_API_KEY")
 	}
 	if relayAIProvider == "" {
 		relayAIProvider = os.Getenv("AI_PROVIDER")
@@ -334,11 +351,11 @@ func runRelay(cmd *cobra.Command, args []string) {
 	r := router.New(aiAgent.HandleMessage)
 
 	// Initialize cron scheduler
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		homeDir = os.TempDir()
+	exeDir := tools.GetExecutableDir()
+	if exeDir == "" {
+		exeDir = os.TempDir()
 	}
-	cronPath := filepath.Join(homeDir, ".lingti.db")
+	cronPath := filepath.Join(exeDir, ".lingti.db")
 	cronStore, err := cronpkg.NewStore(cronPath)
 	if err != nil {
 		log.Fatalf("Failed to open cron store: %v", err)
@@ -350,21 +367,37 @@ func runRelay(cmd *cobra.Command, args []string) {
 		log.Printf("Warning: Failed to start cron scheduler: %v", err)
 	}
 
+	// Create voice transcriber if STT provider is configured
+	var transcriber *voice.Transcriber
+	if relayVoiceSTTProvider != "" {
+		var err error
+		transcriber, err = voice.NewTranscriber(voice.TranscriberConfig{
+			Provider: relayVoiceSTTProvider,
+			APIKey:   relayVoiceSTTAPIKey,
+		})
+		if err != nil {
+			log.Printf("Warning: Failed to create voice transcriber: %v", err)
+		} else {
+			log.Printf("Voice transcription enabled (provider: %s)", relayVoiceSTTProvider)
+		}
+	}
+
 	// Create and register relay platform
 	relayPlatformInstance, err := relay.New(relay.Config{
-		UserID:       relayUserID,
-		Platform:     relayPlatform,
-		ServerURL:    relayServerURL,
-		WebhookURL:   relayWebhookURL,
-		AIProvider:   providerName,
-		AIModel:      modelName,
-		WeComCorpID:     relayWeComCorpID,
-		WeComAgentID:    relayWeComAgentID,
-		WeComSecret:     relayWeComSecret,
-		WeComToken:      relayWeComToken,
-		WeComAESKey:     relayWeComAESKey,
-		WeChatAppID:     relayWeChatAppID,
-		WeChatAppSecret: relayWeChatAppSecret,
+		UserID:           relayUserID,
+		Platform:         relayPlatform,
+		ServerURL:        relayServerURL,
+		WebhookURL:       relayWebhookURL,
+		AIProvider:       providerName,
+		AIModel:          modelName,
+		WeComCorpID:      relayWeComCorpID,
+		WeComAgentID:     relayWeComAgentID,
+		WeComSecret:      relayWeComSecret,
+		WeComToken:       relayWeComToken,
+		WeComAESKey:      relayWeComAESKey,
+		WeChatAppID:      relayWeChatAppID,
+		WeChatAppSecret:  relayWeChatAppSecret,
+		Transcriber:      transcriber,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating relay platform: %v\n", err)

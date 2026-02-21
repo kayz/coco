@@ -17,6 +17,28 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 )
 
+var (
+	exeDirCache string
+)
+
+func getExecutableDir() string {
+	if exeDirCache != "" {
+		return exeDirCache
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		exeDirCache = "."
+		return exeDirCache
+	}
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		exeDirCache = "."
+		return exeDirCache
+	}
+	exeDirCache = filepath.Dir(execPath)
+	return exeDirCache
+}
+
 // Browser manages a browser instance for automation.
 type Browser struct {
 	mu        sync.Mutex
@@ -42,10 +64,10 @@ var (
 // Instance returns the singleton browser manager.
 func Instance() *Browser {
 	once.Do(func() {
-		home, _ := os.UserHomeDir()
+		exeDir := getExecutableDir()
 		instance = &Browser{
 			headless: false,
-			dataDir:  filepath.Join(home, ".lingti-bot", "browser"),
+			dataDir:  filepath.Join(exeDir, ".lingti-bot", "browser"),
 			refs:     make(map[int]RefEntry),
 		}
 	})

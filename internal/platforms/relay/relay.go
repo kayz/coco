@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/pltanton/lingti-bot/internal/platforms/wechat"
 	"github.com/pltanton/lingti-bot/internal/platforms/wecom"
 	"github.com/pltanton/lingti-bot/internal/router"
+	"github.com/pltanton/lingti-bot/internal/voice"
 )
 
 const (
@@ -50,6 +52,8 @@ type Config struct {
 	// WeChat Official Account credentials (when platform=wechat)
 	WeChatAppID     string
 	WeChatAppSecret string
+	// Optional voice transcriber for voice messages
+	Transcriber *voice.Transcriber
 }
 
 // Platform implements router.Platform for cloud relay
@@ -73,6 +77,8 @@ type Platform struct {
 	kfCursors   map[string]string
 	kfCursorsMu sync.Mutex
 	kfEnabled   bool
+	// Voice transcriber
+	transcriber *voice.Transcriber
 }
 
 // Protocol message types
@@ -172,7 +178,8 @@ func New(cfg Config) (*Platform, error) {
 	}
 
 	p := &Platform{
-		config: cfg,
+		config:     cfg,
+		transcriber: cfg.Transcriber,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -781,20 +788,186 @@ func (p *Platform) handleRawWeComMessage(data []byte) {
 		}
 	case "image":
 		routerMsg.MediaID = receivedMsg.MediaId
-		routerMsg.Text = "[图片]"
 		routerMsg.Metadata["pic_url"] = receivedMsg.PicUrl
+		
+		if p.wecomPlatform != nil {
+			log.Printf("[Relay] Downloading image: media_id=%s", receivedMsg.MediaId)
+			
+			tempDir := os.TempDir()
+			tempFile := filepath.Join(tempDir, fmt.Sprintf("relay_image_%s.jpg", receivedMsg.MediaId))
+			
+			if err := p.wecomPlatform.GetMedia(receivedMsg.MediaId, tempFile); err != nil {
+				log.Printf("[Relay] ❌ Failed to download image: %v", err)
+				routerMsg.Text = "[图片] (下载失败)"
+			} else {
+				if fileInfo, err := os.Stat(tempFile); err == nil {
+					log.Printf("[Relay] ✅ Downloaded image: size=%d bytes", fileInfo.Size())
+					
+					if imgData, err := os.ReadFile(tempFile); err == nil {
+						routerMsg.Attachments = append(routerMsg.Attachments, router.Attachment{
+							Type:     "image",
+							Data:     imgData,
+							MIMEType: "image/jpeg",
+						})
+						routerMsg.Text = ""
+						log.Printf("[Relay] ✅ Added image to message attachments")
+					}
+				}
+				defer os.Remove(tempFile)
+			}
+		} else {
+			routerMsg.Text = "[图片]"
+		}
 	case "voice":
 		routerMsg.MediaID = receivedMsg.MediaId
-		routerMsg.Text = "[语音]"
 		routerMsg.Metadata["format"] = receivedMsg.Format
+		
+		// Transcribe voice to text if transcriber is available
+		log.Printf("[Relay] Voice message received: media_id=%s, format=%s", receivedMsg.MediaId, receivedMsg.Format)
+		log.Printf("[Relay] transcriber available: %v, wecomPlatform available: %v", (p.transcriber != nil), (p.wecomPlatform != nil))
+		
+		if p.transcriber != nil && p.wecomPlatform != nil {
+			log.Printf("[Relay] Starting voice transcription, media_id=%s", receivedMsg.MediaId)
+			
+			// Download voice file
+			tempDir := os.TempDir()
+			tempFile := filepath.Join(tempDir, fmt.Sprintf("relay_voice_%s.%s", receivedMsg.MediaId, receivedMsg.Format))
+			wavFile := filepath.Join(tempDir, fmt.Sprintf("relay_voice_%s.wav", receivedMsg.MediaId))
+			log.Printf("[Relay] Downloading to: %s", tempFile)
+			
+			if err := p.wecomPlatform.GetMedia(receivedMsg.MediaId, tempFile); err != nil {
+				log.Printf("[Relay] ❌ Failed to download voice: %v", err)
+				routerMsg.Text = "[语音] (下载失败)"
+			} else {
+				// Check file size and content
+				if fileInfo, err := os.Stat(tempFile); err == nil {
+					log.Printf("[Relay] ✅ Downloaded voice file: size=%d bytes", fileInfo.Size())
+					
+					// Read first 512 bytes to check what it is
+					if fileContent, err := os.ReadFile(tempFile); err == nil {
+						previewLen := min(512, len(fileContent))
+						log.Printf("[Relay] File content preview (first %d bytes): %q", previewLen, fileContent[:previewLen])
+					}
+				}
+				
+				// Convert AMR to WAV using ffmpeg if needed
+				var audioFile string
+				if receivedMsg.Format == "amr" {
+					log.Printf("[Relay] Converting AMR to WAV...")
+					if err := convertAMRToWAV(tempFile, wavFile); err != nil {
+						log.Printf("[Relay] ❌ Failed to convert AMR to WAV: %v", err)
+						routerMsg.Text = "[语音] (格式转换失败)"
+					} else {
+						log.Printf("[Relay] ✅ Converted to WAV")
+						audioFile = wavFile
+					}
+				} else {
+					audioFile = tempFile
+				}
+				
+				if audioFile != "" {
+					// Read audio file
+					audio, err := os.ReadFile(audioFile)
+					if err != nil {
+						log.Printf("[Relay] ❌ Failed to read voice file: %v", err)
+						routerMsg.Text = "[语音] (读取失败)"
+					} else {
+						log.Printf("[Relay] ✅ Read audio data: %d bytes", len(audio))
+						
+						// Transcribe to text
+						transcribed, err := p.transcriber.Transcribe(p.ctx, audio)
+						if err != nil {
+							log.Printf("[Relay] ❌ Failed to transcribe voice: %v", err)
+							routerMsg.Text = "[语音] (转文字失败)"
+						} else {
+							routerMsg.Text = transcribed
+							routerMsg.Metadata["message_type"] = "voice"
+							log.Printf("[Relay] ✅ Transcribed voice: %s", transcribed)
+						}
+					}
+				}
+			}
+			
+			// Clean up temp files
+			defer func() {
+				os.Remove(tempFile)
+				os.Remove(wavFile)
+			}()
+		} else {
+			log.Printf("[Relay] ⚠️ No transcriber or wecomPlatform available")
+			routerMsg.Text = "[语音]"
+		}
 	case "video":
 		routerMsg.MediaID = receivedMsg.MediaId
 		routerMsg.Text = "[视频]"
 	case "file":
 		routerMsg.MediaID = receivedMsg.MediaId
 		routerMsg.FileName = receivedMsg.FileName
-		routerMsg.Text = "[文件] " + receivedMsg.FileName
 		routerMsg.Metadata["file_size"] = receivedMsg.FileSize
+		
+		if p.wecomPlatform != nil {
+			log.Printf("[Relay] Downloading file: media_id=%s, filename=%s", receivedMsg.MediaId, receivedMsg.FileName)
+			
+			tempDir := os.TempDir()
+			tempFile := filepath.Join(tempDir, receivedMsg.FileName)
+			
+			if err := p.wecomPlatform.GetMedia(receivedMsg.MediaId, tempFile); err != nil {
+				log.Printf("[Relay] ❌ Failed to download file: %v", err)
+				routerMsg.Text = "[文件] " + receivedMsg.FileName + " (下载失败)"
+			} else {
+				if fileInfo, err := os.Stat(tempFile); err == nil {
+					log.Printf("[Relay] ✅ Downloaded file: size=%d bytes", fileInfo.Size())
+					
+					if fileData, err := os.ReadFile(tempFile); err == nil {
+						ext := filepath.Ext(receivedMsg.FileName)
+						mimeType := "application/octet-stream"
+						switch ext {
+						case ".pdf":
+							mimeType = "application/pdf"
+						case ".doc":
+							mimeType = "application/msword"
+						case ".docx":
+							mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+						case ".xls":
+							mimeType = "application/vnd.ms-excel"
+						case ".xlsx":
+							mimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+						case ".ppt":
+							mimeType = "application/vnd.ms-powerpoint"
+						case ".pptx":
+							mimeType = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+						case ".txt":
+							mimeType = "text/plain"
+						case ".md":
+							mimeType = "text/markdown"
+						case ".json":
+							mimeType = "application/json"
+						case ".zip":
+							mimeType = "application/zip"
+						case ".rar":
+							mimeType = "application/x-rar-compressed"
+						case ".png":
+							mimeType = "image/png"
+						case ".jpg", ".jpeg":
+							mimeType = "image/jpeg"
+						case ".gif":
+							mimeType = "image/gif"
+						}
+						
+						routerMsg.Attachments = append(routerMsg.Attachments, router.Attachment{
+							Type:     "file",
+							Data:     fileData,
+							MIMEType: mimeType,
+						})
+						routerMsg.Text = ""
+						log.Printf("[Relay] ✅ Added file to message attachments: %s (type: %s)", receivedMsg.FileName, mimeType)
+					}
+				}
+				defer os.Remove(tempFile)
+			}
+		} else {
+			routerMsg.Text = "[文件] " + receivedMsg.FileName
+		}
 	default:
 		log.Printf("[Relay] Ignoring WeCom message type: %s", receivedMsg.MsgType)
 		return
@@ -1043,4 +1216,62 @@ func wechatMediaType(filePath, mediaType string) string {
 	default:
 		return ""
 	}
+}
+
+// findFFmpeg tries to find ffmpeg executable in common locations
+func findFFmpeg() (string, error) {
+	// Try PATH first
+	if path, err := exec.LookPath("ffmpeg"); err == nil {
+		return path, nil
+	}
+
+	// Common Windows installation paths
+	commonPaths := []string{
+		"C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe",
+		"C:\\Program Files (x86)\\ffmpeg\\bin\\ffmpeg.exe",
+		"C:\\ffmpeg\\bin\\ffmpeg.exe",
+		filepath.Join(os.Getenv("PROGRAMFILES"), "Gyan.FFmpeg\\bin\\ffmpeg.exe"),
+		filepath.Join(os.Getenv("PROGRAMFILES(X86)"), "Gyan.FFmpeg\\bin\\ffmpeg.exe"),
+	}
+
+	for _, path := range commonPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+
+	// Try winget installation path (with version number)
+	wingetPackagesDir := filepath.Join(os.Getenv("LOCALAPPDATA"), "Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe")
+	if entries, err := os.ReadDir(wingetPackagesDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() && strings.HasPrefix(entry.Name(), "ffmpeg-") {
+				ffmpegPath := filepath.Join(wingetPackagesDir, entry.Name(), "bin", "ffmpeg.exe")
+				if _, err := os.Stat(ffmpegPath); err == nil {
+					return ffmpegPath, nil
+				}
+			}
+		}
+	}
+
+	return "", fmt.Errorf("ffmpeg not found in PATH or common locations")
+}
+
+// convertAMRToWAV converts an AMR audio file to WAV format using ffmpeg
+func convertAMRToWAV(inputPath, outputPath string) error {
+	// Check if ffmpeg is available
+	ffmpegPath, err := findFFmpeg()
+	if err != nil {
+		return fmt.Errorf("ffmpeg not found: %w", err)
+	}
+
+	log.Printf("[Relay] Using FFmpeg: %s", ffmpegPath)
+
+	// Run ffmpeg to convert AMR to WAV
+	cmd := exec.Command(ffmpegPath, "-i", inputPath, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-y", outputPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ffmpeg failed: %w\n%s", err, output)
+	}
+
+	return nil
 }

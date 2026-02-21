@@ -28,8 +28,7 @@ func FileListOld(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolRes
 
 	// Expand home directory
 	if strings.HasPrefix(path, "~") {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, path[1:])
+		path = ExpandTilde(path)
 	}
 
 	absPath, err := filepath.Abs(path)
@@ -140,8 +139,7 @@ func FileDeleteOld(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 
 	// Expand home directory
 	if strings.HasPrefix(path, "~") {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, path[1:])
+		path = ExpandTilde(path)
 	}
 
 	absPath, err := filepath.Abs(path)

@@ -269,6 +269,10 @@ func (p *SystemProvider) SpeechToText(ctx context.Context, audio []byte, opts ST
 	switch runtime.GOOS {
 	case "darwin":
 		return p.macSTT(ctx, audio, opts)
+	case "windows":
+		return p.windowsSTT(ctx, audio, opts)
+	case "linux":
+		return p.linuxSTT(ctx, audio, opts)
 	default:
 		return "", fmt.Errorf("system STT not supported on %s", runtime.GOOS)
 	}
@@ -337,6 +341,59 @@ func (p *SystemProvider) linuxTTS(ctx context.Context, text string, opts TTSOpti
 
 // macSTT uses whisper.cpp for speech-to-text
 func (p *SystemProvider) macSTT(ctx context.Context, audio []byte, opts STTOptions) (string, error) {
+	return p.genericWhisperSTT(ctx, audio, opts)
+}
+
+// windowsSTT uses whisper via Python
+func (p *SystemProvider) windowsSTT(ctx context.Context, audio []byte, opts STTOptions) (string, error) {
+	return p.genericWhisperSTT(ctx, audio, opts)
+}
+
+// linuxSTT uses whisper via Python or whisper.cpp
+func (p *SystemProvider) linuxSTT(ctx context.Context, audio []byte, opts STTOptions) (string, error) {
+	return p.genericWhisperSTT(ctx, audio, opts)
+}
+
+// findFFmpeg tries to find ffmpeg executable in common locations
+func findFFmpeg() (string, error) {
+	// Try PATH first
+	if path, err := exec.LookPath("ffmpeg"); err == nil {
+		return path, nil
+	}
+
+	// Common Windows installation paths
+	commonPaths := []string{
+		"C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe",
+		"C:\\Program Files (x86)\\ffmpeg\\bin\\ffmpeg.exe",
+		"C:\\ffmpeg\\bin\\ffmpeg.exe",
+		filepath.Join(os.Getenv("PROGRAMFILES"), "Gyan.FFmpeg\\bin\\ffmpeg.exe"),
+		filepath.Join(os.Getenv("PROGRAMFILES(X86)"), "Gyan.FFmpeg\\bin\\ffmpeg.exe"),
+	}
+
+	for _, path := range commonPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+
+	// Try winget installation path (with version number)
+	wingetPackagesDir := filepath.Join(os.Getenv("LOCALAPPDATA"), "Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe")
+	if entries, err := os.ReadDir(wingetPackagesDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() && strings.HasPrefix(entry.Name(), "ffmpeg-") {
+				ffmpegPath := filepath.Join(wingetPackagesDir, entry.Name(), "bin", "ffmpeg.exe")
+				if _, err := os.Stat(ffmpegPath); err == nil {
+					return ffmpegPath, nil
+				}
+			}
+		}
+	}
+
+	return "", fmt.Errorf("ffmpeg not found")
+}
+
+// genericWhisperSTT uses whisper (either C++ or Python) for speech-to-text
+func (p *SystemProvider) genericWhisperSTT(ctx context.Context, audio []byte, opts STTOptions) (string, error) {
 	// Save audio to temp file
 	tmpFile, err := os.CreateTemp("", "stt-*.wav")
 	if err != nil {
@@ -351,15 +408,42 @@ func (p *SystemProvider) macSTT(ctx context.Context, audio []byte, opts STTOptio
 
 	// Find whisper binary - try multiple names
 	var whisperPath string
-	for _, name := range []string{"whisper-cli", "whisper", "whisper-cpp"} {
+	var isPython bool
+	
+	// First try whisper.cpp
+	for _, name := range []string{"whisper-cli", "whisper-cpp"} {
 		if path, err := exec.LookPath(name); err == nil {
 			whisperPath = path
+			isPython = false
 			break
+		}
+	}
+	
+	// Then try Python whisper
+	if whisperPath == "" {
+		if path, err := exec.LookPath("whisper"); err == nil {
+			// Check if this is whisper.cpp or Python whisper
+			// Run whisper --help to check
+			helpCmd := exec.Command(path, "--help")
+			helpOutput, _ := helpCmd.CombinedOutput()
+			if strings.Contains(string(helpOutput), "whisper.cpp") {
+				whisperPath = path
+				isPython = false
+			} else {
+				whisperPath = path
+				isPython = true
+			}
+		} else if path, err := exec.LookPath("python"); err == nil {
+			whisperPath = path
+			isPython = true
+		} else if path, err := exec.LookPath("python3"); err == nil {
+			whisperPath = path
+			isPython = true
 		}
 	}
 
 	if whisperPath == "" {
-		return "", fmt.Errorf("no STT engine available (install whisper-cpp: brew install whisper-cpp)")
+		return "", fmt.Errorf("no STT engine available (install whisper: pip install openai-whisper)")
 	}
 
 	// Find model file
@@ -368,33 +452,139 @@ func (p *SystemProvider) macSTT(ctx context.Context, audio []byte, opts STTOptio
 		return "", fmt.Errorf("whisper model not found (download from https://huggingface.co/ggerganov/whisper.cpp)")
 	}
 
-	// Build whisper-cli arguments
-	args := []string{"-m", modelPath, "-f", tmpFile.Name(), "--no-prints", "-nt"}
-
 	// Add language option (default to Chinese)
 	lang := opts.Language
 	if lang == "" {
 		lang = "zh" // Default to Chinese
 	}
-	args = append(args, "-l", lang)
 
-	// Run whisper-cli
+	var args []string
+	var useStdout bool
+	
+	// Get temp dir and make sure it's available
+	tempDir := os.TempDir()
+	
+	// Get current environment variables
+	env := os.Environ()
+	
+	if isPython {
+		// Find ffmpeg and add to PATH if using Python whisper
+		if ffmpegPath, err := findFFmpeg(); err == nil {
+			ffmpegDir := filepath.Dir(ffmpegPath)
+			currentPath := os.Getenv("PATH")
+			newPath := ffmpegDir + string(os.PathListSeparator) + currentPath
+			env = append(env, "PATH="+newPath)
+			logger.Info("[Voice] Added FFmpeg to PATH: %s", ffmpegDir)
+		}
+		
+		// Python whisper command
+		if whisperPath == "python" || whisperPath == "python3" {
+			// Running as module: python -m whisper
+			args = []string{"-m", "whisper", tmpFile.Name(), "--model", "base", "--language", lang, "--output_format", "txt", "--output_dir", tempDir}
+		} else {
+			// Running as direct whisper command
+			args = []string{tmpFile.Name(), "--model", "base", "--language", lang, "--output_format", "txt", "--output_dir", tempDir}
+		}
+		useStdout = false
+		logger.Info("[Voice] Using Python whisper, temp dir: %s, file: %s", tempDir, tmpFile.Name())
+	} else {
+		// whisper.cpp command
+		args = []string{"-m", modelPath, "-f", tmpFile.Name(), "--no-prints", "-nt", "-l", lang}
+		useStdout = true
+	}
+
+	// Run whisper
 	cmd := exec.CommandContext(ctx, whisperPath, args...)
+	cmd.Env = env // Set the modified environment
 	output, err := cmd.CombinedOutput()
+	
+	var result string
 	if err != nil {
 		return "", fmt.Errorf("whisper failed: %w\n%s", err, output)
 	}
 
-	return strings.TrimSpace(string(output)), nil
+	logger.Info("[Voice] Whisper output: %s", string(output))
+
+	if useStdout {
+		// whisper.cpp outputs to stdout
+		result = strings.TrimSpace(string(output))
+	} else {
+		// Python whisper - try multiple ways to get the result
+		baseName := strings.TrimSuffix(filepath.Base(tmpFile.Name()), filepath.Ext(tmpFile.Name()))
+		
+		// Try 1: Look for output file in temp dir
+		txtOutputPath := filepath.Join(tempDir, baseName+".txt")
+		logger.Info("[Voice] Trying to read output file: %s", txtOutputPath)
+		
+		if txtContent, err := os.ReadFile(txtOutputPath); err == nil {
+			result = strings.TrimSpace(string(txtContent))
+			os.Remove(txtOutputPath)
+			logger.Info("[Voice] Successfully read from output file")
+		} else {
+			// Try 2: Look in current directory
+			txtOutputPath2 := baseName + ".txt"
+			logger.Info("[Voice] Trying to read output file (current dir): %s", txtOutputPath2)
+			
+			if txtContent2, err2 := os.ReadFile(txtOutputPath2); err2 == nil {
+				result = strings.TrimSpace(string(txtContent2))
+				os.Remove(txtOutputPath2)
+				logger.Info("[Voice] Successfully read from current dir")
+			} else {
+				// Try 3: List temp dir to see what's there
+				logger.Info("[Voice] Listing temp dir contents:")
+				if entries, err3 := os.ReadDir(tempDir); err3 == nil {
+					for _, entry := range entries {
+						logger.Info("[Voice]   %s", entry.Name())
+					}
+				}
+				
+				// Try 4: Use the stdout output as fallback
+				if len(output) > 0 {
+					result = strings.TrimSpace(string(output))
+					logger.Info("[Voice] Using stdout as fallback")
+				} else {
+					return "", fmt.Errorf("failed to read whisper output file, and no stdout output")
+				}
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // FindWhisperModel searches for a whisper model file
 func FindWhisperModel() string {
 	homeDir, _ := os.UserHomeDir()
+	exeDir, _ := os.Getwd()
 
 	// Common model locations
-	searchPaths := []string{
-		// User-specific locations
+	var searchPaths []string
+	
+	// Check WHISPER_MODEL env var first
+	if modelPath := os.Getenv("WHISPER_MODEL"); modelPath != "" {
+		if _, err := os.Stat(modelPath); err == nil {
+			return modelPath
+		}
+	}
+
+	// Current directory (exe directory)
+	searchPaths = append(searchPaths,
+		filepath.Join(exeDir, "ggml-base.bin"),
+		filepath.Join(exeDir, "ggml-small.bin"),
+		filepath.Join(exeDir, "ggml-tiny.bin"),
+	)
+
+	// Windows-specific locations
+	if runtime.GOOS == "windows" {
+		searchPaths = append(searchPaths,
+			filepath.Join(homeDir, "AppData", "Local", "whisper", "ggml-base.bin"),
+			filepath.Join(homeDir, "AppData", "Local", "whisper", "ggml-small.bin"),
+			filepath.Join(homeDir, "AppData", "Local", "whisper", "ggml-tiny.bin"),
+		)
+	}
+
+	// User-specific locations (Unix-like)
+	searchPaths = append(searchPaths,
 		filepath.Join(homeDir, ".local", "share", "whisper", "ggml-base.bin"),
 		filepath.Join(homeDir, ".local", "share", "whisper", "ggml-small.bin"),
 		filepath.Join(homeDir, ".local", "share", "whisper", "ggml-tiny.bin"),
@@ -410,16 +600,9 @@ func FindWhisperModel() string {
 		// Linux locations
 		"/usr/share/whisper-cpp/ggml-base.bin",
 		"/usr/local/share/whisper/ggml-base.bin",
-	}
+	)
 
-	// Check WHISPER_MODEL env var first
-	if modelPath := os.Getenv("WHISPER_MODEL"); modelPath != "" {
-		if _, err := os.Stat(modelPath); err == nil {
-			return modelPath
-		}
-	}
-
-	// Search common paths
+	// Search all paths
 	for _, path := range searchPaths {
 		if _, err := os.Stat(path); err == nil {
 			return path

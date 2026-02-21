@@ -19,16 +19,15 @@ func ScreenshotCapture(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 	if p, ok := req.Params.Arguments["path"].(string); ok && p != "" {
 		outputPath = p
 	} else {
-		// Default to Desktop with timestamp
-		home, _ := os.UserHomeDir()
+		// Default to executable directory with timestamp
+		exeDir := GetExecutableDir()
 		timestamp := time.Now().Format("2006-01-02_15-04-05")
-		outputPath = filepath.Join(home, "Desktop", fmt.Sprintf("screenshot_%s.png", timestamp))
+		outputPath = filepath.Join(exeDir, fmt.Sprintf("screenshot_%s.png", timestamp))
 	}
 
 	// Expand home directory
 	if len(outputPath) > 0 && outputPath[0] == '~' {
-		home, _ := os.UserHomeDir()
-		outputPath = filepath.Join(home, outputPath[1:])
+		outputPath = ExpandTilde(outputPath)
 	}
 
 	// Make path absolute

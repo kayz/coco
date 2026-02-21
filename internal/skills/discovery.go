@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/pltanton/lingti-bot/internal/tools"
 	"gopkg.in/yaml.v3"
 )
 
@@ -310,8 +311,8 @@ func looksLikeSkillsDir(dir string) bool {
 
 // managedSkillsDir returns the user-level skills directory
 func managedSkillsDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".lingti", "skills")
+	exeDir := tools.GetExecutableDir()
+	return filepath.Join(exeDir, ".lingti", "skills")
 }
 
 // HasBinary checks if a binary exists in PATH
@@ -327,12 +328,9 @@ func RuntimeOS() string {
 
 // ShortenHomePath replaces the home directory with ~ for display
 func ShortenHomePath(path string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	if strings.HasPrefix(path, home) {
-		return "~" + path[len(home):]
+	exeDir := tools.GetExecutableDir()
+	if strings.HasPrefix(path, exeDir) {
+		return "~" + path[len(exeDir):]
 	}
 	return path
 }

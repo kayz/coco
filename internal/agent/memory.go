@@ -1,43 +1,72 @@
 package agent
 
 import (
+	"encoding/json"
+	"log"
 	"sync"
 	"time"
+
+	"github.com/pltanton/lingti-bot/internal/persist"
 )
 
 // ConversationMemory stores conversation history per user/channel
 type ConversationMemory struct {
 	conversations map[string]*Conversation
 	mu            sync.RWMutex
-	maxMessages   int           // Max messages to keep per conversation
-	ttl           time.Duration // Time to live for conversations
+	store         *persist.Store
+	maxMessages   int
 }
 
 // Conversation holds messages for a single conversation
 type Conversation struct {
-	Messages  []Message
-	UpdatedAt time.Time
+	ID         int64
+	Messages   []Message
+	UpdatedAt  time.Time
 }
 
 // NewMemory creates a new conversation memory store
-func NewMemory(maxMessages int, ttl time.Duration) *ConversationMemory {
+func NewMemory(store *persist.Store, maxMessages int) *ConversationMemory {
 	if maxMessages <= 0 {
-		maxMessages = 20 // Default: keep last 20 messages
-	}
-	if ttl <= 0 {
-		ttl = 30 * time.Minute // Default: 30 minutes
+		maxMessages = 200
 	}
 
 	m := &ConversationMemory{
 		conversations: make(map[string]*Conversation),
+		store:         store,
 		maxMessages:   maxMessages,
-		ttl:           ttl,
 	}
 
-	// Start cleanup goroutine
-	go m.cleanup()
-
+	m.LoadFromStore()
 	return m
+}
+
+// LoadFromStore loads all active conversations from the persistent store
+func (m *ConversationMemory) LoadFromStore() {
+	if m.store == nil {
+		return
+	}
+
+	convs, err := m.store.LoadAllActiveConversations()
+	if err != nil {
+		log.Printf("[MEMORY] Failed to load conversations from store: %v", err)
+		return
+	}
+
+	for _, pc := range convs {
+		key := persist.ConversationKey(pc.Platform, pc.ChannelID, pc.UserID)
+		msgs := make([]Message, 0, len(pc.Messages))
+		for _, pm := range pc.Messages {
+			msgs = append(msgs, m.convertPersistMessage(pm))
+		}
+
+		m.conversations[key] = &Conversation{
+			ID:        pc.ID,
+			Messages:  msgs,
+			UpdatedAt: pc.UpdatedAt,
+		}
+	}
+
+	log.Printf("[MEMORY] Loaded %d conversations from store", len(m.conversations))
 }
 
 // GetHistory returns the conversation history for a key (user+channel)
@@ -50,12 +79,6 @@ func (m *ConversationMemory) GetHistory(key string) []Message {
 		return nil
 	}
 
-	// Check if expired
-	if time.Since(conv.UpdatedAt) > m.ttl {
-		return nil
-	}
-
-	// Return a copy
 	messages := make([]Message, len(conv.Messages))
 	copy(messages, conv.Messages)
 	return messages
@@ -68,8 +91,16 @@ func (m *ConversationMemory) AddMessage(key string, msg Message) {
 
 	conv, ok := m.conversations[key]
 	if !ok {
+		platform, channelID, userID := persist.ParseConversationKey(key)
+		pc, err := m.store.GetOrCreateConversation(platform, channelID, userID)
+		if err != nil {
+			log.Printf("[MEMORY] Failed to get/create conversation: %v", err)
+			return
+		}
 		conv = &Conversation{
-			Messages: make([]Message, 0),
+			ID:        pc.ID,
+			Messages:  make([]Message, 0),
+			UpdatedAt: time.Now(),
 		}
 		m.conversations[key] = conv
 	}
@@ -77,14 +108,19 @@ func (m *ConversationMemory) AddMessage(key string, msg Message) {
 	conv.Messages = append(conv.Messages, msg)
 	conv.UpdatedAt = time.Now()
 
-	// Trim if exceeds max
 	if len(conv.Messages) > m.maxMessages {
-		// Keep the last maxMessages, but always keep pairs (user+assistant)
 		startIdx := len(conv.Messages) - m.maxMessages
 		if startIdx%2 != 0 {
-			startIdx++ // Ensure we start with a user message
+			startIdx++
 		}
 		conv.Messages = conv.Messages[startIdx:]
+	}
+
+	if m.store != nil {
+		pm := m.convertToPersistMessage(msg)
+		if err := m.store.AddMessage(conv.ID, pm); err != nil {
+			log.Printf("[MEMORY] Failed to persist message: %v", err)
+		}
 	}
 }
 
@@ -95,8 +131,16 @@ func (m *ConversationMemory) AddExchange(key string, userMsg, assistantMsg Messa
 
 	conv, ok := m.conversations[key]
 	if !ok {
+		platform, channelID, userID := persist.ParseConversationKey(key)
+		pc, err := m.store.GetOrCreateConversation(platform, channelID, userID)
+		if err != nil {
+			log.Printf("[MEMORY] Failed to get/create conversation: %v", err)
+			return
+		}
 		conv = &Conversation{
-			Messages: make([]Message, 0),
+			ID:        pc.ID,
+			Messages:  make([]Message, 0),
+			UpdatedAt: time.Now(),
 		}
 		m.conversations[key] = conv
 	}
@@ -104,13 +148,23 @@ func (m *ConversationMemory) AddExchange(key string, userMsg, assistantMsg Messa
 	conv.Messages = append(conv.Messages, userMsg, assistantMsg)
 	conv.UpdatedAt = time.Now()
 
-	// Trim if exceeds max
 	if len(conv.Messages) > m.maxMessages {
 		startIdx := len(conv.Messages) - m.maxMessages
 		if startIdx%2 != 0 {
 			startIdx++
 		}
 		conv.Messages = conv.Messages[startIdx:]
+	}
+
+	if m.store != nil {
+		pUserMsg := m.convertToPersistMessage(userMsg)
+		pAssistMsg := m.convertToPersistMessage(assistantMsg)
+		if err := m.store.AddMessage(conv.ID, pUserMsg); err != nil {
+			log.Printf("[MEMORY] Failed to persist user message: %v", err)
+		}
+		if err := m.store.AddMessage(conv.ID, pAssistMsg); err != nil {
+			log.Printf("[MEMORY] Failed to persist assistant message: %v", err)
+		}
 	}
 }
 
@@ -128,26 +182,51 @@ func (m *ConversationMemory) ClearAll() {
 	m.conversations = make(map[string]*Conversation)
 }
 
-// cleanup periodically removes expired conversations
-func (m *ConversationMemory) cleanup() {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		m.mu.Lock()
-		now := time.Now()
-		for key, conv := range m.conversations {
-			if now.Sub(conv.UpdatedAt) > m.ttl {
-				delete(m.conversations, key)
-			}
-		}
-		m.mu.Unlock()
+func (m *ConversationMemory) convertPersistMessage(pm persist.Message) Message {
+	return Message{
+		Role:       pm.Role,
+		Content:    pm.Content,
+		ToolCalls:  m.convertToolCalls(pm.ToolCalls),
 	}
 }
 
-// ConversationKey generates a unique key for a conversation
-func ConversationKey(platform, channelID, userID string) string {
-	// Use channel+user for unique conversations
-	// This means each user has their own context per channel
-	return platform + ":" + channelID + ":" + userID
+func (m *ConversationMemory) convertToPersistMessage(msg Message) persist.Message {
+	return persist.Message{
+		Role:       msg.Role,
+		Content:    msg.Content,
+		ToolCalls:  m.convertToPersistToolCalls(msg.ToolCalls),
+	}
+}
+
+func (m *ConversationMemory) convertToolCalls(ptcs []persist.ToolCall) []ToolCall {
+	if ptcs == nil {
+		return nil
+	}
+	tcs := make([]ToolCall, 0, len(ptcs))
+	for _, ptc := range ptcs {
+		input, _ := json.Marshal(ptc.Input)
+		tcs = append(tcs, ToolCall{
+			ID:     ptc.ID,
+			Name:   ptc.Name,
+			Input:  input,
+		})
+	}
+	return tcs
+}
+
+func (m *ConversationMemory) convertToPersistToolCalls(tcs []ToolCall) []persist.ToolCall {
+	if tcs == nil {
+		return nil
+	}
+	ptcs := make([]persist.ToolCall, 0, len(tcs))
+	for _, tc := range tcs {
+		var input map[string]interface{}
+		_ = json.Unmarshal(tc.Input, &input)
+		ptcs = append(ptcs, persist.ToolCall{
+			ID:     tc.ID,
+			Name:   tc.Name,
+			Input:  input,
+		})
+	}
+	return ptcs
 }

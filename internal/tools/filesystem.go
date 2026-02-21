@@ -16,11 +16,8 @@ func FileRead(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult
 		return mcp.NewToolResultError("path is required"), nil
 	}
 
-	// Expand home directory
-	if len(path) > 0 && path[0] == '~' {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, path[1:])
-	}
+	// Expand ~ to executable directory
+	path = ExpandTilde(path)
 
 	// Make path absolute
 	absPath, err := filepath.Abs(path)
@@ -48,11 +45,8 @@ func FileWrite(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResul
 		return mcp.NewToolResultError("content is required"), nil
 	}
 
-	// Expand home directory
-	if len(path) > 0 && path[0] == '~' {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, path[1:])
-	}
+	// Expand ~ to executable directory
+	path = ExpandTilde(path)
 
 	// Make path absolute
 	absPath, err := filepath.Abs(path)
@@ -80,11 +74,8 @@ func FileList(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult
 		path = "."
 	}
 
-	// Expand home directory
-	if len(path) > 0 && path[0] == '~' {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, path[1:])
-	}
+	// Expand ~ to executable directory
+	path = ExpandTilde(path)
 
 	// Make path absolute
 	absPath, err := filepath.Abs(path)
@@ -134,11 +125,8 @@ func FileSearch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResu
 		path = "."
 	}
 
-	// Expand home directory
-	if len(path) > 0 && path[0] == '~' {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, path[1:])
-	}
+	// Expand ~ to executable directory
+	path = ExpandTilde(path)
 
 	// Make path absolute
 	absPath, err := filepath.Abs(path)
@@ -192,11 +180,8 @@ func FileInfo(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult
 		return mcp.NewToolResultError("path is required"), nil
 	}
 
-	// Expand home directory
-	if len(path) > 0 && path[0] == '~' {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, path[1:])
-	}
+	// Expand ~ to executable directory
+	path = ExpandTilde(path)
 
 	// Make path absolute
 	absPath, err := filepath.Abs(path)

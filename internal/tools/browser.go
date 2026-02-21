@@ -210,14 +210,13 @@ func BrowserScreenshot(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 	if p, ok := req.Params.Arguments["path"].(string); ok && p != "" {
 		outputPath = p
 	} else {
-		home, _ := os.UserHomeDir()
+		exeDir := GetExecutableDir()
 		timestamp := time.Now().Format("2006-01-02_15-04-05")
-		outputPath = filepath.Join(home, "Desktop", fmt.Sprintf("browser_screenshot_%s.png", timestamp))
+		outputPath = filepath.Join(exeDir, fmt.Sprintf("browser_screenshot_%s.png", timestamp))
 	}
 
 	if len(outputPath) > 0 && outputPath[0] == '~' {
-		home, _ := os.UserHomeDir()
-		outputPath = filepath.Join(home, outputPath[1:])
+		outputPath = ExpandTilde(outputPath)
 	}
 
 	absPath, err := filepath.Abs(outputPath)

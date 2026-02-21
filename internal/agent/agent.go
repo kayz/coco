@@ -4,18 +4,46 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pltanton/lingti-bot/internal/config"
 	cronpkg "github.com/pltanton/lingti-bot/internal/cron"
 	"github.com/pltanton/lingti-bot/internal/logger"
+	"github.com/pltanton/lingti-bot/internal/persist"
 	"github.com/pltanton/lingti-bot/internal/router"
+	"github.com/pltanton/lingti-bot/internal/search"
 	"github.com/pltanton/lingti-bot/internal/security"
 	"github.com/pltanton/lingti-bot/internal/skills"
 )
+
+var (
+	exeDirCache string
+)
+
+// getExecutableDir returns the directory where the executable is located
+func getExecutableDir() string {
+	if exeDirCache != "" {
+		return exeDirCache
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		exeDirCache = "."
+		return exeDirCache
+	}
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		exeDirCache = "."
+		return exeDirCache
+	}
+	exeDirCache = filepath.Dir(execPath)
+	return exeDirCache
+}
 
 // Agent processes messages using AI providers and tools
 type Agent struct {
@@ -29,6 +57,12 @@ type Agent struct {
 	cronCreatedCount   int            // tracks cron_create calls per HandleMessage turn
 	pathChecker        *security.PathChecker
 	disableFileTools   bool
+	persistStore       *persist.Store
+	firstMessageSent   map[string]bool
+	firstMessageMu     sync.RWMutex
+	latestReport       *persist.DailyReport
+	searchRegistry     *search.Registry
+	searchManager      *search.Manager
 }
 
 // Config holds agent configuration
@@ -43,6 +77,35 @@ type Config struct {
 	DisableFileTools   bool     // Completely disable all file operation tools
 }
 
+// loadPromptFile reads a prompt file from the project root
+func loadPromptFile(filename string) string {
+	execPath, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	
+	dir := filepath.Dir(execPath)
+	paths := []string{
+		filepath.Join(dir, filename),
+		filepath.Join(".", filename),
+		filename,
+	}
+	
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return strings.TrimSpace(string(data))
+		}
+	}
+	
+	return ""
+}
+
+// ConversationKey generates a unique key for a conversation
+func ConversationKey(platform, channelID, userID string) string {
+	return platform + ":" + channelID + ":" + userID
+}
+
 // New creates a new Agent with the specified provider
 func New(cfg Config) (*Agent, error) {
 	if cfg.APIKey == "" {
@@ -54,15 +117,126 @@ func New(cfg Config) (*Agent, error) {
 		return nil, err
 	}
 
-	return &Agent{
+	exeDir := getExecutableDir()
+	if exeDir == "" {
+		exeDir = "."
+	}
+
+	dbPath := filepath.Join(exeDir, ".lingti.db")
+	persistStore, err := persist.NewStore(dbPath)
+	if err != nil {
+		return nil, err
+	}
+
+	memory := NewMemory(persistStore, 200)
+
+	searchRegistry := search.NewRegistry()
+	configCfg, err := config.Load()
+	if err != nil {
+		configCfg = config.DefaultConfig()
+	}
+
+	searchManager, err := search.NewManager(configCfg.Search, searchRegistry)
+	if err != nil {
+		log.Printf("[AGENT] Failed to initialize search manager: %v", err)
+	}
+
+	agent := &Agent{
 		provider:           provider,
-		memory:             NewMemory(50, 60*time.Minute), // Keep 50 messages, 60 min TTL
+		memory:             memory,
 		sessions:           NewSessionStore(),
 		autoApprove:        cfg.AutoApprove,
 		customInstructions: cfg.CustomInstructions,
 		pathChecker:        security.NewPathChecker(cfg.AllowedPaths),
 		disableFileTools:   cfg.DisableFileTools,
-	}, nil
+		persistStore:       persistStore,
+		firstMessageSent:   make(map[string]bool),
+		searchRegistry:     searchRegistry,
+		searchManager:      searchManager,
+	}
+
+	agent.initializeDailyReport()
+
+	return agent, nil
+}
+
+// initializeDailyReport initializes the daily report functionality
+func (a *Agent) initializeDailyReport() {
+	yesterday := persist.GetYesterdayDate()
+	report, err := a.persistStore.GetDailyReport(yesterday, "default")
+	
+	if err != nil || report == nil {
+		a.generateDailyReport(yesterday)
+	}
+
+	latest, _ := a.persistStore.GetLatestDailyReport("default")
+	a.latestReport = latest
+}
+
+// generateDailyReport generates a daily report for a specific date
+func (a *Agent) generateDailyReport(date string) {
+	report := &persist.DailyReport{
+		Date:    date,
+		UserID:  "default",
+		Summary: "系统启动时自动生成的日报",
+		Content: fmt.Sprintf("日报自动生成于 %s", time.Now().Format(time.RFC3339)),
+		Tasks:   []persist.TaskItem{},
+		Calendars: []persist.CalendarItem{},
+	}
+	
+	if err := a.persistStore.SaveDailyReport(report); err != nil {
+		log.Printf("[AGENT] Failed to save daily report: %v", err)
+	}
+}
+
+// isFirstMessage checks if this is the first message from a user
+func (a *Agent) isFirstMessage(key string) bool {
+	a.firstMessageMu.RLock()
+	_, sent := a.firstMessageSent[key]
+	a.firstMessageMu.RUnlock()
+	
+	if !sent {
+		a.firstMessageMu.Lock()
+		a.firstMessageSent[key] = true
+		a.firstMessageMu.Unlock()
+		return true
+	}
+	return false
+}
+
+// getReportNotification gets the report notification message
+func (a *Agent) getReportNotification() string {
+	if a.latestReport == nil {
+		return ""
+	}
+	
+	notification := fmt.Sprintf("📋 今日日报 (%s)\n", a.latestReport.Date)
+	if a.latestReport.Summary != "" {
+		notification += fmt.Sprintf("摘要: %s\n\n", a.latestReport.Summary)
+	}
+	
+	if len(a.latestReport.Tasks) > 0 {
+		notification += "📌 当前任务:\n"
+		for _, task := range a.latestReport.Tasks {
+			status := "⭕"
+			if task.Status == "completed" {
+				status = "✅"
+			} else if task.Status == "in_progress" {
+				status = "🔄"
+			}
+			notification += fmt.Sprintf("  %s %s\n", status, task.Title)
+		}
+		notification += "\n"
+	}
+	
+	if len(a.latestReport.Calendars) > 0 {
+		notification += "📅 日历事件:\n"
+		for _, cal := range a.latestReport.Calendars {
+			notification += fmt.Sprintf("  - %s (%s)\n", cal.Title, cal.StartTime)
+		}
+	}
+	
+	return notification
 }
 
 // openaiCompatProviders maps provider names to their default base URLs and models.
@@ -292,6 +466,46 @@ func (a *Agent) handleBuiltinCommand(msg router.Message) (router.Response, bool)
 // SetCronScheduler sets the cron scheduler for the agent
 func (a *Agent) SetCronScheduler(s *cronpkg.Scheduler) {
 	a.cronScheduler = s
+	a.setupDailyReportJob()
+}
+
+// setupDailyReportJob sets up the daily report cron job
+func (a *Agent) setupDailyReportJob() {
+	if a.cronScheduler == nil {
+		return
+	}
+
+	jobs := a.cronScheduler.ListJobs()
+	for _, job := range jobs {
+		if job.Name == "每日日报生成" {
+			log.Printf("[AGENT] Daily report job already exists")
+			return
+		}
+	}
+
+	prompt := `请生成今日日报，包括：
+1. 对昨天的对话内容进行整理和总结
+2. 分析当前的任务状态
+3. 检查日历事件
+4. 生成今日任务清单
+5. 调整定时任务（如有需要）
+
+请使用中文回复。`
+
+	_, err := a.cronScheduler.AddJobWithPrompt(
+		"每日日报生成",
+		"0 3 * * *", // 每天凌晨3点
+		prompt,
+		"local",
+		"daily-report",
+		"default",
+	)
+
+	if err != nil {
+		log.Printf("[AGENT] Failed to create daily report job: %v", err)
+	} else {
+		log.Printf("[AGENT] Daily report job created successfully")
+	}
 }
 
 // ExecuteTool implements the cron.ToolExecutor interface
@@ -338,18 +552,102 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 	history := a.memory.GetHistory(convKey)
 	logger.Trace("[Agent] Conversation key: %s, history messages: %d", convKey, len(history))
 
-	// Create messages with history
+	// Create messages with history, CLEAR ATTACHMENTS from historical messages!
 	messages := make([]Message, 0, len(history)+1)
-	messages = append(messages, history...)
+	for _, histMsg := range history {
+		// Make a copy and clear attachments
+		cleanMsg := histMsg
+		cleanMsg.Attachments = nil
+		messages = append(messages, cleanMsg)
+	}
+	
+	// Process attachments: keep images as attachments, convert text files to text content
+	var attachments []Attachment
+	var fileContentText string
+	
+	for _, routerAttach := range msg.Attachments {
+		if routerAttach.Type == "image" {
+			// Keep images as attachments
+			attachments = append(attachments, Attachment{
+				Type:     routerAttach.Type,
+				Data:     routerAttach.Data,
+				MIMEType: routerAttach.MIMEType,
+			})
+		} else if routerAttach.Type == "file" {
+			// Check file size (limit to 500KB for text content)
+			const maxFileSize = 500 * 1024
+			fileSize := len(routerAttach.Data)
+			
+			// Determine if this is a text-based file we can process
+			isTextFile := false
+			fileExt := ""
+			if msg.FileName != "" {
+				fileExt = strings.ToLower(strings.TrimPrefix(filepath.Ext(msg.FileName), "."))
+			}
+			
+			// List of text-based file extensions we support
+			textExtensions := map[string]bool{
+				"txt": true, "md": true, "markdown": true,
+				"json": true, "xml": true, "yaml": true, "yml": true, "toml": true,
+				"ini": true, "conf": true, "config": true, "env": true,
+				"csv": true, "tsv": true,
+				"sql": true,
+				"go": true, "py": true, "js": true, "ts": true, "jsx": true, "tsx": true,
+				"java": true, "c": true, "cpp": true, "h": true, "hpp": true,
+				"cs": true, "php": true, "rb": true, "swift": true, "kt": true, "kts": true,
+				"rs": true, "sh": true, "bash": true, "ps1": true, "bat": true, "cmd": true,
+				"html": true, "htm": true, "css": true, "scss": true, "less": true,
+				"log": true, "gitignore": true, "dockerfile": true, "makefile": true,
+			}
+			
+			// Check MIME type or file extension
+			if strings.HasPrefix(routerAttach.MIMEType, "text/") ||
+			   strings.Contains(routerAttach.MIMEType, "json") ||
+			   strings.Contains(routerAttach.MIMEType, "xml") ||
+			   strings.Contains(routerAttach.MIMEType, "yaml") ||
+			   (fileExt != "" && textExtensions[fileExt]) ||
+			   (msg.FileName != "" && textExtensions[strings.ToLower(msg.FileName)]) {
+				isTextFile = true
+			}
+			
+			if isTextFile {
+				if fileSize > maxFileSize {
+					// File too large, show warning and truncate
+					fileContentText += fmt.Sprintf("\n\n--- ⚠️ 文件过大 (%d bytes，已截断) ---\n文件名: %s\n内容 (前 %d bytes):\n%s\n", 
+						fileSize, msg.FileName, maxFileSize, string(routerAttach.Data[:maxFileSize]))
+				} else {
+					// Process normally
+					fileContentText += fmt.Sprintf("\n\n--- 文件内容 ---\n文件名: %s\n内容:\n%s\n", 
+						msg.FileName, string(routerAttach.Data))
+				}
+			} else {
+				// Unsupported file type
+				fileContentText += fmt.Sprintf("\n\n--- 📎 文件附件 ---\n文件名: %s\n类型: %s\n大小: %d bytes\n注意: 此文件类型无法直接解析，请使用文本格式的文件。\n", 
+					msg.FileName, routerAttach.MIMEType, fileSize)
+			}
+		}
+	}
+	
+	// Combine original text with file content
+	finalContent := msg.Text
+	if fileContentText != "" {
+		if finalContent != "" {
+			finalContent += fileContentText
+		} else {
+			finalContent = fileContentText
+		}
+	}
+	
 	messages = append(messages, Message{
-		Role:    "user",
-		Content: msg.Text,
+		Role:        "user",
+		Content:     finalContent,
+		Attachments: attachments,
 	})
 
 	// Get system info for context
-	homeDir, _ := os.UserHomeDir()
-	if homeDir == "" {
-		homeDir = "~"
+	exeDir := getExecutableDir()
+	if exeDir == "" {
+		exeDir = "."
 	}
 
 	// Get session settings
@@ -371,23 +669,34 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 - For normal operations (file writes, reads, modifications), proceed immediately`
 	}
 
+	// Load prompt files
+	aboutMe := loadPromptFile("ABOUTME.md")
+	systemContent := loadPromptFile("SYSTEM.md")
+	
+	// Fallback to default if files not found
+	if aboutMe == "" {
+		aboutMe = "You are 灵缇 (Lingti), a helpful AI assistant running on the user's computer."
+	}
+	
 	// System prompt with actual paths
-	systemPrompt := fmt.Sprintf(`You are 灵缇 (Lingti), a helpful AI assistant running on the user's computer.%s
+	var systemPrompt string
+	if systemContent != "" {
+		systemPrompt = fmt.Sprintf(aboutMe+"%s\n\n"+systemContent, 
+			autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg.Username, time.Now().Format("2006-01-02"))
+	} else {
+		systemPrompt = fmt.Sprintf(`You are 灵缇 (Lingti), a helpful AI assistant running on the user's computer.%s
 
 ## System Environment
 - Operating System: %s
 - Architecture: %s
-- Home Directory: %s
-- Desktop: %s/Desktop
-- Documents: %s/Documents
-- Downloads: %s/Downloads
+- Executable Directory: %s
 - User: %s
 
 ## Available Tools
 
 ### File Operations
 - file_send: Send/transfer a file to the user via messaging platform
-- file_list: List directory contents (use ~/Desktop for desktop)
+- file_list: List directory contents (use ~ for executable directory)
 - file_read: Read file contents
 - file_write: Write content to a file (creates parent directories if needed)
 - file_trash: Move files to trash (for delete operations)
@@ -417,7 +726,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 - weather_forecast: Weather forecast
 
 ### Web
-- web_search: Search the web (DuckDuckGo)
+- web_search: Search the web using configured search engines (Metaso, Tavily, or custom engines)
 - web_fetch: Fetch URL content
 - open_url: Open URL in browser
 
@@ -489,7 +798,7 @@ Do NOT waste rounds — try clicking first, inspect only if it fails.
 ## Important Rules
 1. **ALWAYS use tools** - Never tell users to do things manually
 2. **Be action-oriented** - Execute tasks, don't just describe them
-3. **Use correct paths** - 桌面=~/Desktop, 下载=~/Downloads, 文档=~/Documents
+3. **Use correct paths** - Use ~ for executable directory
 4. **Full permission** - You have full permission to execute all tools
 5. **Be concise** - Short, helpful responses
 6. **NEVER claim success without tool execution** - If user asks to create/add/delete something, you MUST call the corresponding tool. Never say "已创建/已添加/已删除" unless you actually called the tool and it succeeded.
@@ -499,7 +808,10 @@ Do NOT waste rounds — try clicking first, inspect only if it fails.
    - Example: cron_create(name="motivation", schedule="43 * * * *", prompt="生成一条独特的编程激励鸡汤，鼓励用户写代码创造新产品")
    - NEVER call cron_create multiple times. NEVER use shell_execute or file_write for cron tasks.
 
-Current date: %s%s%s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, homeDir, homeDir, homeDir, homeDir, msg.Username, time.Now().Format("2006-01-02"), thinkingPrompt, formatSkillsSection())
+Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg.Username, time.Now().Format("2006-01-02"))
+		systemPrompt += thinkingPrompt
+		systemPrompt += formatSkillsSection()
+	}
 
 	if a.customInstructions != "" {
 		systemPrompt += "\n\n## Custom Instructions\n" + a.customInstructions
@@ -573,11 +885,18 @@ Current date: %s%s%s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, homeDir
 		logger.Warn("[Agent] Tool loop hit max rounds (%d), forcing stop (user: %s)", maxToolRounds, msg.Username)
 	}
 
-	// Save conversation to memory
+	// Save conversation to memory (NO ATTACHMENTS!)
 	a.memory.AddExchange(convKey,
-		Message{Role: "user", Content: msg.Text},
+		Message{Role: "user", Content: finalContent},
 		Message{Role: "assistant", Content: resp.Content},
 	)
+
+	// Check if this is the first message and add report notification
+	if a.isFirstMessage(convKey) {
+		if notification := a.getReportNotification(); notification != "" {
+			resp.Content = notification + "\n\n" + resp.Content
+		}
+	}
 
 	// Log response at verbose level
 	logger.Debug("[Agent] Response: %s", resp.Content)
@@ -610,6 +929,88 @@ func formatSkillsSection() string {
 // buildToolsList creates the tools list for the AI provider
 func (a *Agent) buildToolsList() []Tool {
 	return []Tool{
+		// === DAILY REPORT ===
+		{
+			Name:        "save_daily_report",
+			Description: "保存每日日报，包括任务和日历事件的总结",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"date":    map[string]string{"type": "string", "description": "日报日期，格式：YYYY-MM-DD（默认：今天）"},
+					"summary": map[string]string{"type": "string", "description": "日报摘要"},
+					"content": map[string]string{"type": "string", "description": "日报完整内容"},
+					"tasks": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"id":          map[string]string{"type": "string", "description": "任务ID"},
+								"title":       map[string]string{"type": "string", "description": "任务标题"},
+								"description": map[string]string{"type": "string", "description": "任务描述"},
+								"status":      map[string]string{"type": "string", "description": "状态：pending、in_progress、completed"},
+								"priority":    map[string]string{"type": "string", "description": "优先级：low、medium、high"},
+								"due_date":    map[string]string{"type": "string", "description": "截止日期（可选）"},
+							},
+						},
+					},
+					"calendars": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"id":          map[string]string{"type": "string", "description": "日历事件ID"},
+								"title":       map[string]string{"type": "string", "description": "事件标题"},
+								"description": map[string]string{"type": "string", "description": "事件描述"},
+								"start_time":  map[string]string{"type": "string", "description": "开始时间"},
+								"end_time":    map[string]string{"type": "string", "description": "结束时间"},
+								"location":    map[string]string{"type": "string", "description": "地点（可选）"},
+							},
+						},
+					},
+				},
+				"required": []string{"summary"},
+			}),
+		},
+		{
+			Name:        "get_daily_report",
+			Description: "获取指定日期的日报",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"date": map[string]string{"type": "string", "description": "日报日期，格式：YYYY-MM-DD（默认：最近一天）"},
+				},
+			}),
+		},
+		{
+			Name:        "list_daily_reports",
+			Description: "列出所有日报，按日期降序排列",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"limit": map[string]string{"type": "number", "description": "返回数量限制（默认：30）"},
+				},
+			}),
+		},
+		{
+			Name:        "search_messages",
+			Description: "在历史对话消息中搜索关键词",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"keyword": map[string]string{"type": "string", "description": "搜索关键词"},
+					"limit":   map[string]string{"type": "number", "description": "返回数量限制（默认：50）"},
+				},
+				"required": []string{"keyword"},
+			}),
+		},
+		{
+			Name:        "get_conversation_summary",
+			Description: "获取当前对话的摘要信息",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{},
+			}),
+		},
 		// === FILE OPERATIONS ===
 		{
 			Name:        "file_send",
@@ -839,10 +1240,13 @@ func (a *Agent) buildToolsList() []Tool {
 		// === WEB ===
 		{
 			Name:        "web_search",
-			Description: "Search the web using DuckDuckGo",
+			Description: "Search the web using configured search engines (Metaso, Tavily, or custom engines). Start query with '搜索' or 'search' for multi-engine search.",
 			InputSchema: jsonSchema(map[string]any{
 				"type":       "object",
-				"properties": map[string]any{"query": map[string]string{"type": "string", "description": "Search query"}},
+				"properties": map[string]any{
+					"query": map[string]string{"type": "string", "description": "Search query string"},
+					"limit": map[string]string{"type": "number", "description": "Maximum number of results (default: 5)"},
+				},
 				"required":   []string{"query"},
 			}),
 		},
@@ -1196,13 +1600,13 @@ func (a *Agent) buildToolsList() []Tool {
 		// === SCHEDULED TASKS (CRON) ===
 		{
 			Name:        "cron_create",
-			Description: "Create ONE scheduled task. Use 'prompt' to describe what the AI should do each time (generate text, search web, check weather, etc.). The AI runs a full conversation each trigger, so content is fresh every time. Use 'tool'+'arguments' only for raw MCP tool execution without AI. Schedule uses standard 5-field cron: minute hour day month weekday.",
+			Description: "Create ONE scheduled task. Use 'prompt' to describe what the AI should do each time (generate text, search web, check weather, etc.). The AI runs a full conversation each trigger, so content is fresh every time. Use 'tool'+'arguments' only for raw MCP tool execution without AI. Schedule uses standard 5-field cron: minute hour day month weekday. Common examples: '0 9 * * *' (daily at 9am), '0 9 * * 1-5' (weekdays at 9am), '30 8 * * 1' (every Monday at 8:30am), '0 */2 * * *' (every 2 hours).",
 			InputSchema: jsonSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"name":      map[string]string{"type": "string", "description": "Human-readable task name"},
-					"schedule":  map[string]string{"type": "string", "description": "Cron expression (e.g., '43 * * * *' for every hour at :43, '0 9 * * 1-5' for weekdays at 9am)"},
-					"prompt":    map[string]string{"type": "string", "description": "What the AI should do each time this job triggers. AI runs a full conversation and sends the result to the user. Example: '生成一条独特的编程激励鸡汤'"},
+					"schedule":  map[string]string{"type": "string", "description": "Cron expression (5-field: minute hour day month weekday). Examples: '0 9 * * *' (daily 9am), '0 9 * * 1-5' (weekdays 9am), '30 8 * * 1' (Monday 8:30am), '0 */2 * * *' (every 2 hours)"},
+					"prompt":    map[string]string{"type": "string", "description": "What the AI should do each time this job triggers. AI runs a full conversation and sends the result to the user. Example: '生成一条独特的编程激励鸡汤，鼓励用户写代码创造新产品'"},
 					"tool":      map[string]string{"type": "string", "description": "MCP tool to execute periodically (for raw tool execution without AI)"},
 					"arguments": map[string]string{"type": "object", "description": "Arguments for the tool (when using tool parameter)"},
 				},
@@ -1284,8 +1688,11 @@ func (a *Agent) executeTool(ctx context.Context, name string, input json.RawMess
 		return fmt.Sprintf("Error parsing arguments: %v", err)
 	}
 
-	// Handle cron tools that need Agent context
+	// Handle search tools that need Agent context
 	switch name {
+	case "web_search":
+		query, _ := args["query"].(string)
+		return a.executeWebSearchWithManager(ctx, query)
 	case "cron_create":
 		return a.executeCronCreate(args)
 	case "cron_list":
@@ -1296,6 +1703,16 @@ func (a *Agent) executeTool(ctx context.Context, name string, input json.RawMess
 		return a.executeCronPause(args)
 	case "cron_resume":
 		return a.executeCronResume(args)
+	case "save_daily_report":
+		return a.executeSaveDailyReport(args)
+	case "get_daily_report":
+		return a.executeGetDailyReport(args)
+	case "list_daily_reports":
+		return a.executeListDailyReports(args)
+	case "search_messages":
+		return a.executeSearchMessages(args)
+	case "get_conversation_summary":
+		return a.executeGetConversationSummary(args)
 	}
 
 	// Block file tools entirely if disabled
@@ -1463,12 +1880,6 @@ func callToolDirect(ctx context.Context, name string, args map[string]any) strin
 		return executeWeatherForecast(ctx, location, days)
 
 	// Web
-	case "web_search":
-		query := ""
-		if q, ok := args["query"].(string); ok {
-			query = q
-		}
-		return executeWebSearch(ctx, query)
 	case "web_fetch":
 		url := ""
 		if u, ok := args["url"].(string); ok {
@@ -1624,4 +2035,253 @@ func callToolDirect(ctx context.Context, name string, args map[string]any) strin
 func jsonSchema(schema map[string]any) json.RawMessage {
 	data, _ := json.Marshal(schema)
 	return data
+}
+
+// executeSaveDailyReport saves the daily report
+func (a *Agent) executeSaveDailyReport(args map[string]any) string {
+	if a.persistStore == nil {
+		return "Error: persist store not available"
+	}
+
+	date := persist.GetTodayDate()
+	if d, ok := args["date"].(string); ok && d != "" {
+		date = d
+	}
+
+	summary, _ := args["summary"].(string)
+	content, _ := args["content"].(string)
+
+	var tasks []persist.TaskItem
+	if ts, ok := args["tasks"].([]any); ok {
+		for _, t := range ts {
+			if taskMap, ok := t.(map[string]any); ok {
+				task := persist.TaskItem{
+					ID:          getString(taskMap, "id"),
+					Title:       getString(taskMap, "title"),
+					Description: getString(taskMap, "description"),
+					Status:      getString(taskMap, "status"),
+					Priority:    getString(taskMap, "priority"),
+					DueDate:     getString(taskMap, "due_date"),
+				}
+				tasks = append(tasks, task)
+			}
+		}
+	}
+
+	var calendars []persist.CalendarItem
+	if cs, ok := args["calendars"].([]any); ok {
+		for _, c := range cs {
+			if calMap, ok := c.(map[string]any); ok {
+				cal := persist.CalendarItem{
+					ID:          getString(calMap, "id"),
+					Title:       getString(calMap, "title"),
+					Description: getString(calMap, "description"),
+					StartTime:   getString(calMap, "start_time"),
+					EndTime:     getString(calMap, "end_time"),
+					Location:    getString(calMap, "location"),
+				}
+				calendars = append(calendars, cal)
+			}
+		}
+	}
+
+	report := &persist.DailyReport{
+		Date:      date,
+		UserID:    "default",
+		Summary:   summary,
+		Content:   content,
+		Tasks:     tasks,
+		Calendars: calendars,
+	}
+
+	if err := a.persistStore.SaveDailyReport(report); err != nil {
+		return fmt.Sprintf("Error saving daily report: %v", err)
+	}
+
+	a.latestReport = report
+	log.Printf("[AGENT] Daily report saved for %s", date)
+	return fmt.Sprintf("Daily report saved successfully for %s", date)
+}
+
+// executeGetDailyReport gets the daily report
+func (a *Agent) executeGetDailyReport(args map[string]any) string {
+	if a.persistStore == nil {
+		return "Error: persist store not available"
+	}
+
+	var report *persist.DailyReport
+	var err error
+
+	if date, ok := args["date"].(string); ok && date != "" {
+		report, err = a.persistStore.GetDailyReport(date, "default")
+	} else {
+		report, err = a.persistStore.GetLatestDailyReport("default")
+	}
+
+	if err != nil || report == nil {
+		return "No daily report found"
+	}
+
+	result := fmt.Sprintf("📋 日报 (%s)\n\n", report.Date)
+	if report.Summary != "" {
+		result += fmt.Sprintf("摘要: %s\n\n", report.Summary)
+	}
+	if report.Content != "" {
+		result += fmt.Sprintf("内容:\n%s\n\n", report.Content)
+	}
+	if len(report.Tasks) > 0 {
+		result += "📌 任务:\n"
+		for _, task := range report.Tasks {
+			result += fmt.Sprintf("  - [%s] %s\n", task.Status, task.Title)
+		}
+		result += "\n"
+	}
+	if len(report.Calendars) > 0 {
+		result += "📅 日历:\n"
+		for _, cal := range report.Calendars {
+			result += fmt.Sprintf("  - %s (%s)\n", cal.Title, cal.StartTime)
+		}
+	}
+
+	return result
+}
+
+// executeListDailyReports lists all daily reports
+func (a *Agent) executeListDailyReports(args map[string]any) string {
+	if a.persistStore == nil {
+		return "Error: persist store not available"
+	}
+
+	limit := 30
+	if l, ok := args["limit"].(float64); ok {
+		limit = int(l)
+	}
+
+	reports, err := a.persistStore.ListDailyReports("default", limit)
+	if err != nil {
+		return fmt.Sprintf("Error listing daily reports: %v", err)
+	}
+
+	if len(reports) == 0 {
+		return "No daily reports found"
+	}
+
+	result := "📋 日报列表:\n\n"
+	for _, report := range reports {
+		result += fmt.Sprintf("- %s", report.Date)
+		if report.Summary != "" {
+			result += fmt.Sprintf(": %s", report.Summary)
+		}
+		result += "\n"
+	}
+
+	return result
+}
+
+// executeSearchMessages searches messages by keyword
+func (a *Agent) executeSearchMessages(args map[string]any) string {
+	if a.persistStore == nil {
+		return "Error: persist store not available"
+	}
+
+	keyword, _ := args["keyword"].(string)
+	if keyword == "" {
+		return "Error: keyword is required"
+	}
+
+	limit := 50
+	if l, ok := args["limit"].(float64); ok {
+		limit = int(l)
+	}
+
+	messages, err := a.persistStore.SearchMessages("default", keyword, limit)
+	if err != nil {
+		return fmt.Sprintf("Error searching messages: %v", err)
+	}
+
+	if len(messages) == 0 {
+		return fmt.Sprintf("No messages found for keyword: %s", keyword)
+	}
+
+	result := fmt.Sprintf("🔍 搜索结果 (关键词: %s):\n\n", keyword)
+	for _, msg := range messages {
+		roleEmoji := "👤"
+		if msg.Role == "assistant" {
+			roleEmoji = "🤖"
+		}
+		result += fmt.Sprintf("%s [%s] %s: %s\n",
+			roleEmoji,
+			msg.CreatedAt.Format("2006-01-02 15:04"),
+			msg.Role,
+			msg.Content)
+		if len(result) > 3000 {
+			result += "\n... (更多结果已截断)"
+			break
+		}
+	}
+
+	return result
+}
+
+// executeGetConversationSummary gets a summary of the current conversation
+func (a *Agent) executeGetConversationSummary(args map[string]any) string {
+	if a.persistStore == nil {
+		return "Error: persist store not available"
+	}
+
+	conv, err := a.persistStore.GetOrCreateConversation(a.currentMsg.Platform, a.currentMsg.ChannelID, a.currentMsg.UserID)
+	if err != nil {
+		return fmt.Sprintf("Error getting conversation: %v", err)
+	}
+
+	summary, err := a.persistStore.GetConversationSummary(conv.ID)
+	if err != nil {
+		return fmt.Sprintf("Error getting conversation summary: %v", err)
+	}
+
+	result := fmt.Sprintf("📊 对话摘要:\n")
+	result += fmt.Sprintf("- 平台: %s\n", conv.Platform)
+	result += fmt.Sprintf("- 创建时间: %s\n", conv.CreatedAt.Format("2006-01-02 15:04"))
+	result += fmt.Sprintf("- %s", summary)
+
+	return result
+}
+
+func getString(m map[string]any, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func (a *Agent) executeWebSearchWithManager(ctx context.Context, query string) string {
+	if a.searchManager == nil {
+		return "Error: search manager not initialized. Please configure search engines in ~/.lingti.yaml or use --metaso-api-key or --tavily-api-key"
+	}
+
+	// Check if query starts with "搜索" or "search" to trigger multi-engine search
+	queryLower := strings.ToLower(query)
+	if strings.HasPrefix(queryLower, "搜索") || strings.HasPrefix(queryLower, "search") {
+		// Remove the trigger word
+		cleanQuery := query
+		if strings.HasPrefix(queryLower, "搜索") {
+			cleanQuery = strings.TrimSpace(query[len("搜索"):])
+		} else if strings.HasPrefix(queryLower, "search") {
+			cleanQuery = strings.TrimSpace(query[len("search"):])
+		}
+
+		// Multi-engine search
+		combined, err := a.searchManager.SearchAll(ctx, cleanQuery, 5)
+		if err != nil {
+			return fmt.Sprintf("Error searching: %v", err)
+		}
+		return search.FormatCombinedResults(combined)
+	}
+
+	// Normal single-engine search
+	resp, err := a.searchManager.Search(ctx, query, 5)
+	if err != nil {
+		return fmt.Sprintf("Error searching: %v", err)
+	}
+	return search.FormatSearchResults(resp)
 }

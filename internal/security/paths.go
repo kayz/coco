@@ -7,10 +7,45 @@ import (
 	"strings"
 )
 
+var (
+	exeDirCache string
+)
+
 // PathChecker validates file paths against an allowed list.
 // An empty allowed list means no restrictions.
 type PathChecker struct {
 	allowedPaths []string // resolved absolute paths
+}
+
+// getExecutableDir returns the directory where the executable is located
+func getExecutableDir() string {
+	if exeDirCache != "" {
+		return exeDirCache
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		exeDirCache = "."
+		return exeDirCache
+	}
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		exeDirCache = "."
+		return exeDirCache
+	}
+	exeDirCache = filepath.Dir(execPath)
+	return exeDirCache
+}
+
+// expandTilde expands ~ to the executable directory instead of user home
+func expandTilde(path string) string {
+	if len(path) > 0 && path[0] == '~' {
+		exeDir := getExecutableDir()
+		if len(path) == 1 {
+			return exeDir
+		}
+		return filepath.Join(exeDir, path[1:])
+	}
+	return path
 }
 
 // NewPathChecker creates a PathChecker from a list of allowed paths.
@@ -18,7 +53,7 @@ type PathChecker struct {
 func NewPathChecker(allowedPaths []string) *PathChecker {
 	resolved := make([]string, 0, len(allowedPaths))
 	for _, p := range allowedPaths {
-		p = expandHome(p)
+		p = expandTilde(p)
 		abs, err := filepath.Abs(p)
 		if err != nil {
 			continue
@@ -34,7 +69,7 @@ func (pc *PathChecker) IsAllowed(path string) bool {
 	if len(pc.allowedPaths) == 0 {
 		return true
 	}
-	path = expandHome(path)
+	path = expandTilde(path)
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return false
@@ -64,15 +99,4 @@ func (pc *PathChecker) HasRestrictions() bool {
 // AllowedPaths returns the resolved allowed paths.
 func (pc *PathChecker) AllowedPaths() []string {
 	return pc.allowedPaths
-}
-
-func expandHome(path string) string {
-	if strings.HasPrefix(path, "~/") || path == "~" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return path
-		}
-		return filepath.Join(home, path[1:])
-	}
-	return path
 }

@@ -63,14 +63,14 @@ func NewServer(opts ...SecurityOptions) *Server {
 	registerCalendarTools(s)
 	registerFileManagerTools(s)
 	registerBrowserTools(s)
+	registerWebTools(s)
 
 	// Initialize cron scheduler
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		log.Printf("[CRON] Warning: Failed to get home directory: %v", err)
-		homeDir = os.TempDir()
+	exeDir := tools.GetExecutableDir()
+	if exeDir == "" {
+		exeDir = os.TempDir()
 	}
-	cronPath := filepath.Join(homeDir, ".lingti.db")
+	cronPath := filepath.Join(exeDir, ".lingti.db")
 	cronStore, err := cronpkg.NewStore(cronPath)
 	if err != nil {
 		log.Printf("[CRON] Warning: Failed to open cron store: %v", err)
@@ -466,4 +466,19 @@ func registerBrowserTools(s *Server) {
 		mcp.WithDescription("Close a browser tab by target ID, or close the active tab if no ID given"),
 		mcp.WithString("target_id", mcp.Description("Target ID of the tab to close (from browser_tabs)")),
 	), tools.BrowserTabClose)
+}
+
+func registerWebTools(s *Server) {
+	// web_search
+	s.addTool(mcp.NewTool("web_search",
+		mcp.WithDescription("Search the web using configured search engines (supports Metaso, Tavily, or custom engines). Start query with '搜索' or 'search' for multi-engine search."),
+		mcp.WithString("query", mcp.Required(), mcp.Description("Search query string")),
+		mcp.WithNumber("limit", mcp.Description("Maximum number of results (default: 5)")),
+	), tools.WebSearch)
+
+	// web_fetch
+	s.addTool(mcp.NewTool("web_fetch",
+		mcp.WithDescription("Fetch and extract text content from a web page URL"),
+		mcp.WithString("url", mcp.Required(), mcp.Description("URL to fetch content from")),
+	), tools.WebFetch)
 }

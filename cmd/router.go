@@ -32,6 +32,7 @@ import (
 	"github.com/pltanton/lingti-bot/internal/platforms/teams"
 	"github.com/pltanton/lingti-bot/internal/platforms/whatsapp"
 	"github.com/pltanton/lingti-bot/internal/router"
+	"github.com/pltanton/lingti-bot/internal/tools"
 	"github.com/pltanton/lingti-bot/internal/voice"
 	"github.com/spf13/cobra"
 )
@@ -173,7 +174,7 @@ func init() {
 	routerCmd.Flags().StringVar(&aiBaseURL, "base-url", "", "Custom API base URL (or AI_BASE_URL env)")
 	routerCmd.Flags().StringVar(&aiModel, "model", "", "Model name (or AI_MODEL env)")
 	routerCmd.Flags().StringVar(&aiInstructions, "instructions", "", "Path to custom instructions file appended to system prompt")
-	routerCmd.Flags().StringVar(&voiceSTTProvider, "voice-stt-provider", "", "Voice STT provider: system, openai (or VOICE_STT_PROVIDER env)")
+	routerCmd.Flags().StringVar(&voiceSTTProvider, "voice-stt-provider", "", "Voice STT provider: system, openai (or VOICE_STT_PROVIDER env, default: system)")
 	routerCmd.Flags().StringVar(&voiceSTTAPIKey, "voice-stt-api-key", "", "Voice STT API key (or VOICE_STT_API_KEY env)")
 	routerCmd.Flags().StringVar(&browserDebugDir, "debug-dir", "", "Directory for debug screenshots (or BROWSER_DEBUG_DIR env, default: /tmp/lingti-bot on Unix)")
 }
@@ -345,8 +346,11 @@ func runRouter(cmd *cobra.Command, args []string) {
 			aiModel = os.Getenv("ANTHROPIC_MODEL")
 		}
 	}
-	if voiceSTTProvider == "" {
-		voiceSTTProvider = os.Getenv("VOICE_STT_PROVIDER")
+	// Check environment variable first, then use default
+	if envVal := os.Getenv("VOICE_STT_PROVIDER"); envVal != "" {
+		voiceSTTProvider = envVal
+	} else if voiceSTTProvider == "" {
+		voiceSTTProvider = "system"
 	}
 	if voiceSTTAPIKey == "" {
 		voiceSTTAPIKey = os.Getenv("VOICE_STT_API_KEY")
@@ -568,11 +572,11 @@ func runRouter(cmd *cobra.Command, args []string) {
 	r := router.New(aiAgent.HandleMessage)
 
 	// Initialize cron scheduler
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		homeDir = os.TempDir()
+	exeDir := tools.GetExecutableDir()
+	if exeDir == "" {
+		exeDir = os.TempDir()
 	}
-	cronPath := filepath.Join(homeDir, ".lingti.db")
+	cronPath := filepath.Join(exeDir, ".lingti.db")
 	cronStore, err := cronpkg.NewStore(cronPath)
 	if err != nil {
 		logger.Error("Failed to open cron store: %v", err)
@@ -600,6 +604,21 @@ func runRouter(cmd *cobra.Command, args []string) {
 		logger.Info("Slack tokens not provided, skipping Slack integration")
 	}
 
+	// Create voice transcriber if STT provider is configured (for WeCom and Telegram)
+	var transcriber *voice.Transcriber
+	if voiceSTTProvider != "" {
+		var err error
+		transcriber, err = voice.NewTranscriber(voice.TranscriberConfig{
+			Provider: voiceSTTProvider,
+			APIKey:   voiceSTTAPIKey,
+		})
+		if err != nil {
+			logger.Warn("Failed to create voice transcriber: %v", err)
+		} else {
+			logger.Info("Voice transcription enabled (provider: %s)", voiceSTTProvider)
+		}
+	}
+
 	// Register Feishu if tokens are provided
 	if feishuAppID != "" && feishuAppSecret != "" {
 		feishuPlatform, err := feishu.New(feishu.Config{
@@ -617,21 +636,6 @@ func runRouter(cmd *cobra.Command, args []string) {
 
 	// Register Telegram if token is provided
 	if telegramToken != "" {
-		// Create voice transcriber if STT provider is configured
-		var transcriber *voice.Transcriber
-		if voiceSTTProvider != "" {
-			var err error
-			transcriber, err = voice.NewTranscriber(voice.TranscriberConfig{
-				Provider: voiceSTTProvider,
-				APIKey:   voiceSTTAPIKey,
-			})
-			if err != nil {
-				logger.Warn("Failed to create voice transcriber: %v", err)
-			} else {
-				logger.Info("Voice transcription enabled (provider: %s)", voiceSTTProvider)
-			}
-		}
-
 		telegramPlatform, err := telegram.New(telegram.Config{
 			Token:       telegramToken,
 			Transcriber: transcriber,
@@ -668,6 +672,7 @@ func runRouter(cmd *cobra.Command, args []string) {
 			Token:          wecomToken,
 			EncodingAESKey: wecomAESKey,
 			CallbackPort:   wecomPort,
+			Transcriber:    transcriber,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating WeCom platform: %v\n", err)

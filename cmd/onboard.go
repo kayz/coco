@@ -15,14 +15,22 @@ import (
 )
 
 var (
-	onboardProvider    string
-	onboardAPIKey      string
-	onboardBaseURL     string
-	onboardModel       string
-	onboardPlatform    string
-	onboardMode        string
-	onboardReset       bool
-	onboardRelayUserID string
+	onboardProvider       string
+	onboardAPIKey         string
+	onboardBaseURL        string
+	onboardModel          string
+	onboardPlatform       string
+	onboardMode           string
+	onboardReset          bool
+	onboardRelayUserID    string
+	onboardMetasoAPIKey   string
+	onboardTavilyAPIKey   string
+	onboardSearchEngine   string
+	onboardAutoSearch     bool
+	onboardCustomEngine   string
+	onboardCustomType     string
+	onboardCustomAPIKey   string
+	onboardCustomBaseURL  string
 	// WeCom
 	onboardWeComCorpID  string
 	onboardWeComAgentID string
@@ -117,6 +125,16 @@ func init() {
 	onboardCmd.Flags().StringVar(&onboardMode, "mode", "", "Connection mode: relay, router")
 	onboardCmd.Flags().BoolVar(&onboardReset, "reset", false, "Clear existing config and start fresh")
 	onboardCmd.Flags().StringVar(&onboardRelayUserID, "relay-user-id", "", "Relay user ID (from /whoami)")
+
+	// Search
+	onboardCmd.Flags().StringVar(&onboardMetasoAPIKey, "metaso-api-key", "", "Metaso search API key")
+	onboardCmd.Flags().StringVar(&onboardTavilyAPIKey, "tavily-api-key", "", "Tavily search API key")
+	onboardCmd.Flags().StringVar(&onboardSearchEngine, "search-engine", "", "Primary search engine: metaso, tavily")
+	onboardCmd.Flags().BoolVar(&onboardAutoSearch, "auto-search", true, "Enable automatic search for uncertain queries")
+	onboardCmd.Flags().StringVar(&onboardCustomEngine, "custom-search-name", "", "Custom search engine name")
+	onboardCmd.Flags().StringVar(&onboardCustomType, "custom-search-type", "", "Custom search engine type (custom_http)")
+	onboardCmd.Flags().StringVar(&onboardCustomAPIKey, "custom-search-api-key", "", "Custom search engine API key")
+	onboardCmd.Flags().StringVar(&onboardCustomBaseURL, "custom-search-base-url", "", "Custom search engine base URL")
 
 	// WeCom
 	onboardCmd.Flags().StringVar(&onboardWeComCorpID, "wecom-corp-id", "", "WeCom Corp ID")
@@ -241,7 +259,7 @@ func runOnboard(cmd *cobra.Command, args []string) {
 	cfg, _ := config.Load()
 
 	if hasOnboardFlags(cmd) {
-		applyOnboardFlags(cfg)
+		applyOnboardFlags(cfg, cmd)
 	} else {
 		initScanner()
 		runInteractiveWizard(cfg)
@@ -256,10 +274,12 @@ func runOnboard(cmd *cobra.Command, args []string) {
 }
 
 func hasOnboardFlags(_ *cobra.Command) bool {
-	return onboardProvider != "" || onboardAPIKey != "" || onboardPlatform != ""
+	return onboardProvider != "" || onboardAPIKey != "" || onboardPlatform != "" ||
+		onboardMetasoAPIKey != "" || onboardTavilyAPIKey != "" || onboardSearchEngine != "" ||
+		onboardCustomEngine != ""
 }
 
-func applyOnboardFlags(cfg *config.Config) {
+func applyOnboardFlags(cfg *config.Config, cmd *cobra.Command) {
 	if onboardProvider != "" {
 		cfg.AI.Provider = onboardProvider
 	}
@@ -440,6 +460,42 @@ func applyOnboardFlags(cfg *config.Config) {
 			cfg.Platforms.Nextcloud.RoomToken = onboardNextcloudRoomToken
 		}
 	}
+
+	// Search config
+	if onboardMetasoAPIKey != "" {
+		for i := range cfg.Search.Engines {
+			if cfg.Search.Engines[i].Name == "metaso" {
+				cfg.Search.Engines[i].APIKey = onboardMetasoAPIKey
+			}
+		}
+	}
+	if onboardTavilyAPIKey != "" {
+		for i := range cfg.Search.Engines {
+			if cfg.Search.Engines[i].Name == "tavily" {
+				cfg.Search.Engines[i].APIKey = onboardTavilyAPIKey
+			}
+		}
+	}
+	if onboardSearchEngine != "" {
+		cfg.Search.PrimaryEngine = onboardSearchEngine
+	}
+	if cmd.Flags().Changed("auto-search") {
+		cfg.Search.AutoSearch = onboardAutoSearch
+	}
+	if onboardCustomEngine != "" {
+		customEngine := config.SearchEngineConfig{
+			Name:    onboardCustomEngine,
+			Type:    onboardCustomType,
+			APIKey:  onboardCustomAPIKey,
+			BaseURL: onboardCustomBaseURL,
+			Enabled: true,
+			Priority: len(cfg.Search.Engines) + 1,
+		}
+		if customEngine.Type == "" {
+			customEngine.Type = "custom_http"
+		}
+		cfg.Search.Engines = append(cfg.Search.Engines, customEngine)
+	}
 }
 
 func runInteractiveWizard(cfg *config.Config) {
@@ -466,6 +522,7 @@ func runInteractiveWizard(cfg *config.Config) {
 	stepAIProvider(cfg)
 	stepPlatform(cfg)
 	stepConnectionMode(cfg)
+	stepSearchConfig(cfg)
 }
 
 type providerInfo struct {
@@ -913,11 +970,145 @@ func stepRelayConfig(cfg *config.Config) {
 	}
 }
 
+func stepSearchConfig(cfg *config.Config) {
+	fmt.Println("\n  Step 4/4: Search Engines (optional)")
+
+	idx := promptSelect("Would you like to configure search engines?", []string{
+		"Yes, configure search engines",
+		"No, skip search configuration",
+	}, 0)
+
+	if idx == 1 {
+		fmt.Println("\n  > Search configuration skipped")
+		return
+	}
+
+	fmt.Println("\n  Configure Metaso (秘塔搜索) - Chinese search engine")
+	metasoAPIKey := ""
+	for _, e := range cfg.Search.Engines {
+		if e.Name == "metaso" {
+			metasoAPIKey = e.APIKey
+		}
+	}
+	metasoAPIKey = promptText("Metaso API Key (leave empty to skip)", metasoAPIKey)
+	if metasoAPIKey != "" {
+		for i := range cfg.Search.Engines {
+			if cfg.Search.Engines[i].Name == "metaso" {
+				cfg.Search.Engines[i].APIKey = metasoAPIKey
+			}
+		}
+	}
+
+	fmt.Println("\n  Configure Tavily - Global search engine")
+	tavilyAPIKey := ""
+	for _, e := range cfg.Search.Engines {
+		if e.Name == "tavily" {
+			tavilyAPIKey = e.APIKey
+		}
+	}
+	tavilyAPIKey = promptText("Tavily API Key (leave empty to skip)", tavilyAPIKey)
+	if tavilyAPIKey != "" {
+		for i := range cfg.Search.Engines {
+			if cfg.Search.Engines[i].Name == "tavily" {
+				cfg.Search.Engines[i].APIKey = tavilyAPIKey
+			}
+		}
+	}
+
+	if metasoAPIKey != "" || tavilyAPIKey != "" {
+		engineOptions := []string{}
+		if metasoAPIKey != "" {
+			engineOptions = append(engineOptions, "metaso     (秘塔搜索, Chinese)")
+		}
+		if tavilyAPIKey != "" {
+			engineOptions = append(engineOptions, "tavily     (Global search)")
+		}
+
+		if len(engineOptions) > 1 {
+			fmt.Println()
+			defIdx := 0
+			if cfg.Search.PrimaryEngine == "tavily" && tavilyAPIKey != "" {
+				defIdx = 1
+			}
+			primaryIdx := promptSelect("Select primary search engine:", engineOptions, defIdx)
+			if primaryIdx == 0 && metasoAPIKey != "" {
+				cfg.Search.PrimaryEngine = "metaso"
+			} else if primaryIdx == 1 && tavilyAPIKey != "" {
+				cfg.Search.PrimaryEngine = "tavily"
+			}
+		}
+
+		fmt.Println()
+		autoSearchIdx := promptSelect("Enable automatic search for uncertain queries?", []string{
+			"Yes, auto-search when needed",
+			"No, only search when explicitly asked",
+		}, 0)
+		cfg.Search.AutoSearch = autoSearchIdx == 0
+	}
+
+	fmt.Println()
+	customIdx := promptSelect("Would you like to add a custom search engine?", []string{
+		"No, skip custom engine",
+		"Yes, add a custom search engine",
+	}, 0)
+
+	if customIdx == 1 {
+		fmt.Println()
+		customName := promptText("Custom engine name", "")
+		if customName != "" {
+			customType := promptText("Engine type (custom_http)", "custom_http")
+			customBaseURL := promptText("Base URL (API endpoint)", "")
+			customAPIKey := promptText("API Key (leave empty if not needed)", "")
+
+			customEngine := config.SearchEngineConfig{
+				Name:     customName,
+				Type:     customType,
+				APIKey:   customAPIKey,
+				BaseURL:  customBaseURL,
+				Enabled:  true,
+				Priority: len(cfg.Search.Engines) + 1,
+			}
+			cfg.Search.Engines = append(cfg.Search.Engines, customEngine)
+			fmt.Printf("\n  > Custom search engine '%s' added\n", customName)
+		}
+	}
+
+	fmt.Println("\n  > Search configuration complete")
+}
+
 func printOnboardSummary(cfg *config.Config) {
 	fmt.Println()
 	fmt.Println("  ───────────────────────────────────")
 	fmt.Printf("  > Configuration saved to %s\n", config.ConfigPath())
 	fmt.Println()
+
+	// Search configuration summary
+	hasSearch := false
+	for _, e := range cfg.Search.Engines {
+		if e.APIKey != "" && e.Enabled {
+			hasSearch = true
+			break
+		}
+	}
+
+	if hasSearch {
+		fmt.Println("  Search engines configured:")
+		for _, e := range cfg.Search.Engines {
+			if e.APIKey != "" && e.Enabled {
+				engineLabel := e.Name
+				if cfg.Search.PrimaryEngine == e.Name {
+					engineLabel += " [primary]"
+				}
+				fmt.Printf("    - %s (API Key: %s)\n", engineLabel, maskKey(e.APIKey))
+			}
+		}
+		if cfg.Search.AutoSearch {
+			fmt.Println("    Auto-search: enabled")
+		} else {
+			fmt.Println("    Auto-search: disabled")
+		}
+		fmt.Println()
+	}
 
 	if cfg.Mode == "relay" {
 		if cfg.Relay.UserID != "" && cfg.Relay.Platform != "" {

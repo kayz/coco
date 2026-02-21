@@ -14,6 +14,10 @@ var (
 	logLevel         string
 	autoApprove      bool
 	disableFileTools bool
+	metasoAPIKey     string
+	tavilyAPIKey     string
+	primaryEngine    string
+	autoSearch       bool
 )
 
 var rootCmd = &cobra.Command{
@@ -46,6 +50,14 @@ func init() {
 		"Automatically approve all operations without prompting (skip security checks)")
 	rootCmd.PersistentFlags().BoolVar(&disableFileTools, "no-files", false,
 		"Disable all file operation tools")
+	rootCmd.PersistentFlags().StringVar(&metasoAPIKey, "metaso-api-key", "",
+		"Metaso search API key")
+	rootCmd.PersistentFlags().StringVar(&tavilyAPIKey, "tavily-api-key", "",
+		"Tavily search API key")
+	rootCmd.PersistentFlags().StringVar(&primaryEngine, "search-engine", "metaso",
+		"Primary search engine: metaso, tavily")
+	rootCmd.PersistentFlags().BoolVar(&autoSearch, "auto-search", true,
+		"Enable automatic search for uncertain queries")
 }
 
 // IsAutoApprove returns true if auto-approve mode is enabled globally
@@ -84,7 +96,69 @@ func loadSecurityOptions() mcp.SecurityOptions {
 	}
 }
 
+// updateSearchConfig updates the search configuration in the config file
+func updateSearchConfig() {
+	cfg, err := config.Load()
+	if err != nil {
+		cfg = config.DefaultConfig()
+	}
+
+	// Priority: command line flag > environment variable > config file
+
+	// Update primary engine
+	if primaryEngine != "" {
+		cfg.Search.PrimaryEngine = primaryEngine
+	} else if envPrimaryEngine := os.Getenv("SEARCH_ENGINE"); envPrimaryEngine != "" {
+		cfg.Search.PrimaryEngine = envPrimaryEngine
+	}
+
+	// Update auto search
+	if rootCmd.Flags().Changed("auto-search") {
+		cfg.Search.AutoSearch = autoSearch
+	} else if envAutoSearch := os.Getenv("AUTO_SEARCH"); envAutoSearch != "" {
+		cfg.Search.AutoSearch = envAutoSearch == "true" || envAutoSearch == "1"
+	}
+
+	// Update Metaso API key
+	if metasoAPIKey != "" {
+		for i := range cfg.Search.Engines {
+			if cfg.Search.Engines[i].Name == "metaso" {
+				cfg.Search.Engines[i].APIKey = metasoAPIKey
+			}
+		}
+	} else if envMetasoKey := os.Getenv("METASO_API_KEY"); envMetasoKey != "" {
+		for i := range cfg.Search.Engines {
+			if cfg.Search.Engines[i].Name == "metaso" {
+				cfg.Search.Engines[i].APIKey = envMetasoKey
+			}
+		}
+	}
+
+	// Update Tavily API key
+	if tavilyAPIKey != "" {
+		for i := range cfg.Search.Engines {
+			if cfg.Search.Engines[i].Name == "tavily" {
+				cfg.Search.Engines[i].APIKey = tavilyAPIKey
+			}
+		}
+	} else if envTavilyKey := os.Getenv("TAVILY_API_KEY"); envTavilyKey != "" {
+		for i := range cfg.Search.Engines {
+			if cfg.Search.Engines[i].Name == "tavily" {
+				cfg.Search.Engines[i].APIKey = envTavilyKey
+			}
+		}
+	}
+
+	// Save config
+	if err := cfg.Save(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to save config: %v\n", err)
+	}
+}
+
 func Execute() {
+	// Update search config from command line flags
+	updateSearchConfig()
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

@@ -13,6 +13,28 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+var (
+	exeDirCache string
+)
+
+func getExecutableDir() string {
+	if exeDirCache != "" {
+		return exeDirCache
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		exeDirCache = "."
+		return exeDirCache
+	}
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		exeDirCache = "."
+		return exeDirCache
+	}
+	exeDirCache = filepath.Dir(execPath)
+	return exeDirCache
+}
+
 // Store handles persistence of scheduled jobs using SQLite
 type Store struct {
 	db *sql.DB
@@ -76,13 +98,13 @@ func (s *Store) init() error {
 
 // migrateFromJSON imports jobs from the legacy crons.json if it exists
 func (s *Store) migrateFromJSON() {
-	// The old JSON path was ~/.lingti/crons.json
-	// Derive it: dbPath is ~/.lingti.db, so old path is ~/.lingti/crons.json
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
+	// The old JSON path is .lingti/crons.json in executable directory
+	// Derive it from executable directory
+	exeDir := getExecutableDir()
+	if exeDir == "" {
 		return
 	}
-	jsonPath := filepath.Join(homeDir, ".lingti", "crons.json")
+	jsonPath := filepath.Join(exeDir, ".lingti", "crons.json")
 
 	data, err := os.ReadFile(jsonPath)
 	if err != nil {

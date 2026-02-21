@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/pltanton/lingti-bot/internal/tools"
 )
 
 // Skill represents a skill/plugin that can be executed
@@ -96,8 +98,8 @@ type Registry struct {
 // NewRegistry creates a new skill registry
 func NewRegistry(skillDir string) *Registry {
 	if skillDir == "" {
-		home, _ := os.UserHomeDir()
-		skillDir = filepath.Join(home, ".lingti", "skills")
+		exeDir := tools.GetExecutableDir()
+		skillDir = filepath.Join(exeDir, ".lingti", "skills")
 	}
 
 	return &Registry{

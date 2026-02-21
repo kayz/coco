@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/pltanton/lingti-bot/internal/logger"
 	"github.com/pltanton/lingti-bot/internal/router"
+	"github.com/pltanton/lingti-bot/internal/voice"
 )
 
 const (
@@ -40,16 +42,18 @@ type Platform struct {
 	server         *http.Server
 	ctx            context.Context
 	cancel         context.CancelFunc
+	transcriber    *voice.Transcriber
 }
 
 // Config holds WeChat Work configuration
 type Config struct {
-	CorpID         string // 企业ID
-	AgentID        string // 应用AgentId
-	Secret         string // 应用Secret
-	Token          string // 回调Token
-	EncodingAESKey string // 回调EncodingAESKey
-	CallbackPort   int    // 回调服务端口 (default: 8080)
+	CorpID         string            // 企业ID
+	AgentID        string            // 应用AgentId
+	Secret         string            // 应用Secret
+	Token          string            // 回调Token
+	EncodingAESKey string            // 回调EncodingAESKey
+	CallbackPort   int               // 回调服务端口 (default: 8080)
+	Transcriber    *voice.Transcriber // Optional voice transcriber for voice messages
 }
 
 // New creates a new WeChat Work platform
@@ -73,6 +77,7 @@ func New(cfg Config) (*Platform, error) {
 		token:          cfg.Token,
 		encodingAESKey: cfg.EncodingAESKey,
 		msgCrypt:       msgCrypt,
+		transcriber:    cfg.Transcriber,
 	}
 
 	// Set up HTTP server for callbacks (skip if CallbackPort < 0, e.g. API-only mode)
@@ -353,8 +358,42 @@ func (p *Platform) processMessage(plaintext []byte) {
 		routerMsg.Metadata["pic_url"] = msg.PicUrl
 	case "voice":
 		routerMsg.MediaID = msg.MediaId
-		routerMsg.Text = "[语音]"
 		routerMsg.Metadata["format"] = msg.Format
+		
+		// Transcribe voice to text if transcriber is available
+		if p.transcriber != nil {
+			logger.Info("[WeCom] Transcribing voice message, media_id=%s", msg.MediaId)
+			
+			// Download voice file
+			tempDir := os.TempDir()
+			tempFile := filepath.Join(tempDir, fmt.Sprintf("wecom_voice_%s.%s", msg.MediaId, msg.Format))
+			defer os.Remove(tempFile)
+			
+			if err := p.GetMedia(msg.MediaId, tempFile); err != nil {
+				logger.Error("[WeCom] Failed to download voice: %v", err)
+				routerMsg.Text = "[语音] (下载失败)"
+			} else {
+				// Read audio file
+				audio, err := os.ReadFile(tempFile)
+				if err != nil {
+					logger.Error("[WeCom] Failed to read voice file: %v", err)
+					routerMsg.Text = "[语音] (读取失败)"
+				} else {
+					// Transcribe to text
+					transcribed, err := p.transcriber.Transcribe(p.ctx, audio)
+					if err != nil {
+						logger.Error("[WeCom] Failed to transcribe voice: %v", err)
+						routerMsg.Text = "[语音] (转文字失败)"
+					} else {
+						routerMsg.Text = transcribed
+						routerMsg.Metadata["message_type"] = "voice"
+						logger.Info("[WeCom] Transcribed voice: %s", transcribed)
+					}
+				}
+			}
+		} else {
+			routerMsg.Text = "[语音]"
+		}
 	case "video":
 		routerMsg.MediaID = msg.MediaId
 		routerMsg.Text = "[视频]"

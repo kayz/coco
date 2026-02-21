@@ -7,6 +7,29 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var (
+	exeDirCache string
+)
+
+// getExecutableDir returns the directory where the executable is located
+func getExecutableDir() string {
+	if exeDirCache != "" {
+		return exeDirCache
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		exeDirCache = "."
+		return exeDirCache
+	}
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		exeDirCache = "."
+		return exeDirCache
+	}
+	exeDirCache = filepath.Dir(execPath)
+	return exeDirCache
+}
+
 type Config struct {
 	Transport string          `yaml:"transport"` // "stdio" or "sse"
 	Port      int             `yaml:"port"`
@@ -18,6 +41,26 @@ type Config struct {
 	Relay     RelayConfig     `yaml:"relay,omitempty"`
 	Skills    SkillsConfig    `yaml:"skills,omitempty"`
 	Browser   BrowserConfig   `yaml:"browser,omitempty"`
+	Search    SearchConfig    `yaml:"search,omitempty"`
+}
+
+// SearchEngineConfig 单个搜索引擎配置
+type SearchEngineConfig struct {
+	Name       string                 `yaml:"name"`
+	Type       string                 `yaml:"type"`
+	APIKey     string                 `yaml:"api_key,omitempty"`
+	BaseURL    string                 `yaml:"base_url,omitempty"`
+	Enabled    bool                   `yaml:"enabled"`
+	Priority   int                    `yaml:"priority"`
+	Options    map[string]interface{} `yaml:"options,omitempty"`
+}
+
+// SearchConfig 搜索引擎整体配置
+type SearchConfig struct {
+	PrimaryEngine   string               `yaml:"primary_engine"`
+	SecondaryEngine string               `yaml:"secondary_engine"`
+	Engines         []SearchEngineConfig `yaml:"engines"`
+	AutoSearch      bool                 `yaml:"auto_search"`
 }
 
 // BrowserConfig configures browser automation.
@@ -40,8 +83,8 @@ type SkillsConfig struct {
 
 // SkillsDir returns the managed skills directory path
 func SkillsDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".lingti", "skills")
+	exeDir := getExecutableDir()
+	return filepath.Join(exeDir, ".lingti", "skills")
 }
 
 type AIConfig struct {
@@ -203,17 +246,36 @@ func DefaultConfig() *Config {
 			Level: "info",
 			File:  "/tmp/lingti-bot.log",
 		},
+		Search: SearchConfig{
+			PrimaryEngine:   "metaso",
+			SecondaryEngine: "tavily",
+			AutoSearch:      true,
+			Engines: []SearchEngineConfig{
+				{
+					Name:     "metaso",
+					Type:     "metaso",
+					Enabled:  true,
+					Priority: 1,
+				},
+				{
+					Name:     "tavily",
+					Type:     "tavily",
+					Enabled:  true,
+					Priority: 2,
+				},
+			},
+		},
 	}
 }
 
 func ConfigDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".lingti")
+	exeDir := getExecutableDir()
+	return filepath.Join(exeDir, ".lingti")
 }
 
 func ConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".lingti.yaml")
+	exeDir := getExecutableDir()
+	return filepath.Join(exeDir, ".lingti.yaml")
 }
 
 func Load() (*Config, error) {
