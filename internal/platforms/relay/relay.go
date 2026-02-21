@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"os/exec"
@@ -27,7 +29,7 @@ import (
 const (
 	DefaultServerURL  = "wss://bot.lingti.com/ws"
 	DefaultWebhookURL = "https://bot.lingti.com/webhook"
-	ClientVersion     = "1.5.0"
+	ClientVersion     = "1.7.0"
 
 	writeTimeout      = 10 * time.Second
 	readTimeout       = 60 * time.Second
@@ -54,6 +56,8 @@ type Config struct {
 	WeChatAppSecret string
 	// Optional voice transcriber for voice messages
 	Transcriber *voice.Transcriber
+	// Proxy media through relay server (instead of direct API calls)
+	UseMediaProxy bool
 }
 
 // Platform implements router.Platform for cloud relay
@@ -79,6 +83,8 @@ type Platform struct {
 	kfEnabled   bool
 	// Voice transcriber
 	transcriber *voice.Transcriber
+	// Proxy media through relay server (instead of direct API calls)
+	useMediaProxy bool
 }
 
 // Protocol message types
@@ -178,9 +184,10 @@ func New(cfg Config) (*Platform, error) {
 	}
 
 	p := &Platform{
-		config:     cfg,
-		transcriber: cfg.Transcriber,
-		httpClient: &http.Client{
+		config:         cfg,
+		transcriber:    cfg.Transcriber,
+		useMediaProxy:  cfg.UseMediaProxy,
+		httpClient:     &http.Client{
 			Timeout: 30 * time.Second,
 		},
 		kfCursors: make(map[string]string),
@@ -196,8 +203,8 @@ func New(cfg Config) (*Platform, error) {
 		log.Printf("[Relay] WeCom local decryption enabled")
 	}
 
-	// Initialize WeCom platform for direct API calls (media upload/send)
-	if cfg.Platform == "wecom" && cfg.WeComCorpID != "" && cfg.WeComSecret != "" {
+	// Initialize WeCom platform for direct API calls (media upload/send) - only if not using proxy
+	if cfg.Platform == "wecom" && cfg.WeComCorpID != "" && cfg.WeComSecret != "" && !cfg.UseMediaProxy {
 		wp, err := wecom.New(wecom.Config{
 			CorpID:         cfg.WeComCorpID,
 			AgentID:        cfg.WeComAgentID,
@@ -300,7 +307,7 @@ func (p *Platform) Send(ctx context.Context, channelID string, resp router.Respo
 		}
 	}
 
-	// Send file attachments directly via platform API
+	// Send file attachments directly via platform API or proxy
 	for _, file := range resp.Files {
 		mediaType := file.MediaType
 		if mediaType == "" {
@@ -340,6 +347,15 @@ func (p *Platform) Send(ctx context.Context, channelID string, resp router.Respo
 				return fmt.Errorf("failed to send file %s: %w", file.Path, err)
 			}
 			log.Printf("[Relay] File sent successfully via WeChat OA: %s -> %s", file.Path, channelID)
+
+		case p.useMediaProxy:
+			// Use proxy for media upload/send
+			log.Printf("[Relay] Uploading file via proxy: %s (type=%s)", file.Path, mediaType)
+			
+			// When using proxy, we send the file via webhook for server-side handling
+			if err := p.sendFileViaWebhook(ctx, channelID, file.Path, mediaType, resp.Metadata); err != nil {
+				return err
+			}
 
 		case p.wecomPlatform != nil:
 			// WeCom: upload + send via WeCom API
@@ -796,7 +812,14 @@ func (p *Platform) handleRawWeComMessage(data []byte) {
 			tempDir := os.TempDir()
 			tempFile := filepath.Join(tempDir, fmt.Sprintf("relay_image_%s.jpg", receivedMsg.MediaId))
 			
-			if err := p.wecomPlatform.GetMedia(receivedMsg.MediaId, tempFile); err != nil {
+			var err error
+			if p.useMediaProxy {
+				err = p.proxyGetMedia(receivedMsg.MediaId, tempFile)
+			} else {
+				err = p.wecomPlatform.GetMedia(receivedMsg.MediaId, tempFile)
+			}
+			
+			if err != nil {
 				log.Printf("[Relay] ❌ Failed to download image: %v", err)
 				routerMsg.Text = "[图片] (下载失败)"
 			} else {
@@ -826,7 +849,7 @@ func (p *Platform) handleRawWeComMessage(data []byte) {
 		log.Printf("[Relay] Voice message received: media_id=%s, format=%s", receivedMsg.MediaId, receivedMsg.Format)
 		log.Printf("[Relay] transcriber available: %v, wecomPlatform available: %v", (p.transcriber != nil), (p.wecomPlatform != nil))
 		
-		if p.transcriber != nil && p.wecomPlatform != nil {
+		if p.transcriber != nil && (p.wecomPlatform != nil || p.useMediaProxy) {
 			log.Printf("[Relay] Starting voice transcription, media_id=%s", receivedMsg.MediaId)
 			
 			// Download voice file
@@ -835,7 +858,14 @@ func (p *Platform) handleRawWeComMessage(data []byte) {
 			wavFile := filepath.Join(tempDir, fmt.Sprintf("relay_voice_%s.wav", receivedMsg.MediaId))
 			log.Printf("[Relay] Downloading to: %s", tempFile)
 			
-			if err := p.wecomPlatform.GetMedia(receivedMsg.MediaId, tempFile); err != nil {
+			var err error
+			if p.useMediaProxy {
+				err = p.proxyGetMedia(receivedMsg.MediaId, tempFile)
+			} else {
+				err = p.wecomPlatform.GetMedia(receivedMsg.MediaId, tempFile)
+			}
+			
+			if err != nil {
 				log.Printf("[Relay] ❌ Failed to download voice: %v", err)
 				routerMsg.Text = "[语音] (下载失败)"
 			} else {
@@ -905,13 +935,20 @@ func (p *Platform) handleRawWeComMessage(data []byte) {
 		routerMsg.FileName = receivedMsg.FileName
 		routerMsg.Metadata["file_size"] = receivedMsg.FileSize
 		
-		if p.wecomPlatform != nil {
+		if p.wecomPlatform != nil || p.useMediaProxy {
 			log.Printf("[Relay] Downloading file: media_id=%s, filename=%s", receivedMsg.MediaId, receivedMsg.FileName)
 			
 			tempDir := os.TempDir()
 			tempFile := filepath.Join(tempDir, receivedMsg.FileName)
 			
-			if err := p.wecomPlatform.GetMedia(receivedMsg.MediaId, tempFile); err != nil {
+			var err error
+			if p.useMediaProxy {
+				err = p.proxyGetMedia(receivedMsg.MediaId, tempFile)
+			} else {
+				err = p.wecomPlatform.GetMedia(receivedMsg.MediaId, tempFile)
+			}
+			
+			if err != nil {
 				log.Printf("[Relay] ❌ Failed to download file: %v", err)
 				routerMsg.Text = "[文件] " + receivedMsg.FileName + " (下载失败)"
 			} else {
@@ -1274,4 +1311,122 @@ func convertAMRToWAV(inputPath, outputPath string) error {
 	}
 
 	return nil
+}
+
+// getProxyURL derives the proxy API URL from the relay server URL
+func (p *Platform) getProxyURL(path string) string {
+	serverURL := p.config.ServerURL
+	if strings.HasPrefix(serverURL, "wss://") {
+		return "https://" + strings.TrimPrefix(serverURL, "wss://") + path
+	} else if strings.HasPrefix(serverURL, "ws://") {
+		return "http://" + strings.TrimPrefix(serverURL, "ws://") + path
+	}
+	return ""
+}
+
+// proxyGetMedia downloads a media file through the relay server
+func (p *Platform) proxyGetMedia(mediaID string, savePath string) error {
+	proxyURL := p.getProxyURL("/proxy/media/get")
+	if proxyURL == "" {
+		return fmt.Errorf("invalid relay server URL")
+	}
+
+	url := fmt.Sprintf("%s?media_id=%s", proxyURL, mediaID)
+	req, err := http.NewRequestWithContext(p.ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Session-ID", p.sessionID)
+	req.Header.Set("X-User-ID", p.config.UserID)
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("proxy returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	// Check if response is an error JSON
+	if len(body) > 0 && body[0] == '{' {
+		var errResult struct {
+			ErrCode int    `json:"errcode"`
+			ErrMsg  string `json:"errmsg"`
+		}
+		if json.Unmarshal(body, &errResult) == nil && errResult.ErrCode != 0 {
+			return fmt.Errorf("proxy API error: %d - %s", errResult.ErrCode, errResult.ErrMsg)
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(savePath), 0o755); err != nil {
+		return err
+	}
+
+	return os.WriteFile(savePath, body, 0o644)
+}
+
+// proxyUploadMedia uploads a media file through the relay server
+func (p *Platform) proxyUploadMedia(filePath string, mediaType string) (string, error) {
+	proxyURL := p.getProxyURL("/proxy/media/upload")
+	if proxyURL == "" {
+		return "", fmt.Errorf("invalid relay server URL")
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("media", filepath.Base(filePath))
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		return "", err
+	}
+	writer.Close()
+
+	url := fmt.Sprintf("%s?type=%s", proxyURL, mediaType)
+	req, err := http.NewRequestWithContext(p.ctx, http.MethodPost, url, body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-Session-ID", p.sessionID)
+	req.Header.Set("X-User-ID", p.config.UserID)
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("proxy returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+		MediaID string `json:"media_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+
+	if result.ErrCode != 0 {
+		return "", fmt.Errorf("proxy API error: %d - %s", result.ErrCode, result.ErrMsg)
+	}
+
+	return result.MediaID, nil
 }

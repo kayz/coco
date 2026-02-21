@@ -20,15 +20,16 @@ import (
 )
 
 var (
-	relayUserID     string
-	relayPlatform   string
-	relayServerURL  string
-	relayWebhookURL string
-	relayAIProvider    string
-	relayAPIKey        string
-	relayBaseURL       string
-	relayModel         string
-	relayInstructions  string
+	relayUserID         string
+	relayPlatform       string
+	relayServerURL      string
+	relayWebhookURL     string
+	relayUseMediaProxy  bool
+	relayAIProvider     string
+	relayAPIKey         string
+	relayBaseURL        string
+	relayModel          string
+	relayInstructions   string
 	// WeCom credentials for cloud relay
 	relayWeComCorpID  string
 	relayWeComAgentID string
@@ -108,6 +109,7 @@ func init() {
 	relayCmd.Flags().StringVar(&relayPlatform, "platform", "", "Platform: feishu, slack, wechat, or wecom (required, or RELAY_PLATFORM env)")
 	relayCmd.Flags().StringVar(&relayServerURL, "server", "", "WebSocket URL (default: wss://bot.lingti.com/ws, or RELAY_SERVER_URL env)")
 	relayCmd.Flags().StringVar(&relayWebhookURL, "webhook", "", "Webhook URL (default: https://bot.lingti.com/webhook, or RELAY_WEBHOOK_URL env)")
+	relayCmd.Flags().BoolVar(&relayUseMediaProxy, "use-media-proxy", false, "Proxy media download/upload through relay server")
 	relayCmd.Flags().StringVar(&relayAIProvider, "provider", "", "AI provider: claude, deepseek, kimi, qwen (or AI_PROVIDER env)")
 	relayCmd.Flags().StringVar(&relayAPIKey, "api-key", "", "AI API key (or AI_API_KEY env)")
 	relayCmd.Flags().StringVar(&relayBaseURL, "base-url", "", "Custom API base URL (or AI_BASE_URL env)")
@@ -142,6 +144,11 @@ func runRelay(cmd *cobra.Command, args []string) {
 	}
 	if relayWebhookURL == "" {
 		relayWebhookURL = os.Getenv("RELAY_WEBHOOK_URL")
+	}
+	if !relayUseMediaProxy {
+		if os.Getenv("RELAY_USE_MEDIA_PROXY") == "true" || os.Getenv("RELAY_USE_MEDIA_PROXY") == "1" {
+			relayUseMediaProxy = true
+		}
 	}
 	// Check environment variable first, then use default
 	if envVal := os.Getenv("VOICE_STT_PROVIDER"); envVal != "" {
@@ -217,12 +224,21 @@ func runRelay(cmd *cobra.Command, args []string) {
 		if relayModel == "" {
 			relayModel = savedCfg.AI.Model
 		}
-		// Read relay-specific config (platform, user-id) from saved config
+		// Read relay-specific config (platform, user-id, server, webhook, media-proxy) from saved config
 		if relayPlatform == "" && savedCfg.Relay.Platform != "" {
 			relayPlatform = savedCfg.Relay.Platform
 		}
 		if relayUserID == "" && savedCfg.Relay.UserID != "" {
 			relayUserID = savedCfg.Relay.UserID
+		}
+		if relayServerURL == "" && savedCfg.Relay.ServerURL != "" {
+			relayServerURL = savedCfg.Relay.ServerURL
+		}
+		if relayWebhookURL == "" && savedCfg.Relay.WebhookURL != "" {
+			relayWebhookURL = savedCfg.Relay.WebhookURL
+		}
+		if !relayUseMediaProxy && savedCfg.Relay.UseMediaProxy {
+			relayUseMediaProxy = savedCfg.Relay.UseMediaProxy
 		}
 		if relayPlatform == "" && savedCfg.Mode == "relay" {
 			// Infer platform from saved platform credentials
@@ -388,6 +404,7 @@ func runRelay(cmd *cobra.Command, args []string) {
 		Platform:         relayPlatform,
 		ServerURL:        relayServerURL,
 		WebhookURL:       relayWebhookURL,
+		UseMediaProxy:    relayUseMediaProxy,
 		AIProvider:       providerName,
 		AIModel:          modelName,
 		WeComCorpID:      relayWeComCorpID,

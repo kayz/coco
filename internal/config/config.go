@@ -73,8 +73,11 @@ type BrowserConfig struct {
 }
 
 type RelayConfig struct {
-	UserID   string `yaml:"user_id,omitempty"`
-	Platform string `yaml:"platform,omitempty"` // "feishu", "slack", "wechat", "wecom"
+	UserID        string `yaml:"user_id,omitempty"`
+	Platform      string `yaml:"platform,omitempty"` // "feishu", "slack", "wechat", "wecom"
+	ServerURL     string `yaml:"server_url,omitempty"` // Custom relay server WebSocket URL
+	WebhookURL    string `yaml:"webhook_url,omitempty"` // Custom relay server webhook URL
+	UseMediaProxy bool   `yaml:"use_media_proxy,omitempty"` // Proxy media download/upload through relay server
 }
 
 type SkillsConfig struct {
@@ -289,6 +292,11 @@ func DefaultConfig() *Config {
 					Priority: 2,
 				},
 			},
+		},
+		Relay: RelayConfig{
+			ServerURL:     "wss://bot.lingti.com/ws",
+			WebhookURL:    "https://bot.lingti.com/webhook",
+			UseMediaProxy: true,
 		},
 	}
 }
