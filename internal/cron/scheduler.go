@@ -135,6 +135,58 @@ func (s *Scheduler) AddJobWithPrompt(name, schedule, prompt, platform, channelID
 	})
 }
 
+// AddJobWithTag adds a new tool-based job with a tag
+func (s *Scheduler) AddJobWithTag(name, tag, schedule, tool string, arguments map[string]any) (*Job, error) {
+	return s.addJob(&Job{
+		Name:      name,
+		Tag:       tag,
+		Schedule:  schedule,
+		Tool:      tool,
+		Arguments: arguments,
+	})
+}
+
+// AddJobWithMessageAndTag adds a new message-based job with a tag
+func (s *Scheduler) AddJobWithMessageAndTag(name, tag, schedule, message, platform, channelID, userID string) (*Job, error) {
+	return s.addJob(&Job{
+		Name:      name,
+		Tag:       tag,
+		Schedule:  schedule,
+		Message:   message,
+		Platform:  platform,
+		ChannelID: channelID,
+		UserID:    userID,
+	})
+}
+
+// AddJobWithPromptAndTag adds a new prompt-based job with a tag
+func (s *Scheduler) AddJobWithPromptAndTag(name, tag, schedule, prompt, platform, channelID, userID string) (*Job, error) {
+	return s.addJob(&Job{
+		Name:      name,
+		Tag:       tag,
+		Schedule:  schedule,
+		Prompt:    prompt,
+		Platform:  platform,
+		ChannelID: channelID,
+		UserID:    userID,
+	})
+}
+
+// ListJobsByTag returns jobs filtered by tag
+func (s *Scheduler) ListJobsByTag(tag string) []*Job {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	jobs := make([]*Job, 0)
+	for _, job := range s.jobs {
+		if tag == "" || job.Tag == tag {
+			jobs = append(jobs, job.Clone())
+		}
+	}
+
+	return jobs
+}
+
 // addJob validates and schedules a job
 func (s *Scheduler) addJob(job *Job) (*Job, error) {
 	// Normalize 5-field cron to 6-field (our cron instance uses WithSeconds)

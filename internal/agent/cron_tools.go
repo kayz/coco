@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	cronpkg "github.com/pltanton/lingti-bot/internal/cron"
 )
 
 // executeCronCreate creates a new scheduled task
@@ -23,6 +25,7 @@ func (a *Agent) executeCronCreate(args map[string]any) string {
 	message, _ := args["message"].(string)
 	tool, _ := args["tool"].(string)
 	prompt, _ := args["prompt"].(string)
+	tag, _ := args["tag"].(string)
 
 	if name == "" {
 		return "Error: name is required"
@@ -38,28 +41,45 @@ func (a *Agent) executeCronCreate(args map[string]any) string {
 		message = ""
 	}
 
+	var job *cronpkg.Job
+	var err error
+
 	// Prompt-based job: run full AI conversation on schedule
 	if prompt != "" {
-		job, err := a.cronScheduler.AddJobWithPrompt(
-			name, schedule, prompt,
-			a.currentMsg.Platform, a.currentMsg.ChannelID, a.currentMsg.UserID,
-		)
+		if tag != "" {
+			job, err = a.cronScheduler.AddJobWithPromptAndTag(
+				name, tag, schedule, prompt,
+				a.currentMsg.Platform, a.currentMsg.ChannelID, a.currentMsg.UserID,
+			)
+		} else {
+			job, err = a.cronScheduler.AddJobWithPrompt(
+				name, schedule, prompt,
+				a.currentMsg.Platform, a.currentMsg.ChannelID, a.currentMsg.UserID,
+			)
+		}
 		if err != nil {
 			return fmt.Sprintf("Error creating scheduled task: %v", err)
 		}
-		return fmt.Sprintf("Scheduled AI task created:\n- ID: %s\n- Name: %s\n- Schedule: %s\n- Prompt: %s", job.ID, job.Name, job.Schedule, job.Prompt)
+		return fmt.Sprintf("Scheduled AI task created:\n- ID: %s\n- Name: %s\n- Schedule: %s\n- Tag: %s\n- Prompt: %s", job.ID, job.Name, job.Schedule, job.Tag, job.Prompt)
 	}
 
 	// Message-based job
 	if message != "" {
-		job, err := a.cronScheduler.AddJobWithMessage(
-			name, schedule, message,
-			a.currentMsg.Platform, a.currentMsg.ChannelID, a.currentMsg.UserID,
-		)
+		if tag != "" {
+			job, err = a.cronScheduler.AddJobWithMessageAndTag(
+				name, tag, schedule, message,
+				a.currentMsg.Platform, a.currentMsg.ChannelID, a.currentMsg.UserID,
+			)
+		} else {
+			job, err = a.cronScheduler.AddJobWithMessage(
+				name, schedule, message,
+				a.currentMsg.Platform, a.currentMsg.ChannelID, a.currentMsg.UserID,
+			)
+		}
 		if err != nil {
 			return fmt.Sprintf("Error creating scheduled task: %v", err)
 		}
-		return fmt.Sprintf("Scheduled task created:\n- ID: %s\n- Name: %s\n- Schedule: %s\n- Message: %s", job.ID, job.Name, job.Schedule, job.Message)
+		return fmt.Sprintf("Scheduled task created:\n- ID: %s\n- Name: %s\n- Schedule: %s\n- Tag: %s\n- Message: %s", job.ID, job.Name, job.Schedule, job.Tag, job.Message)
 	}
 
 	// Tool-based job
@@ -76,36 +96,56 @@ func (a *Agent) executeCronCreate(args map[string]any) string {
 				}
 			}
 		}
-		job, err := a.cronScheduler.AddJob(name, schedule, tool, arguments)
+		if tag != "" {
+			job, err = a.cronScheduler.AddJobWithTag(name, tag, schedule, tool, arguments)
+		} else {
+			job, err = a.cronScheduler.AddJob(name, schedule, tool, arguments)
+		}
 		if err != nil {
 			return fmt.Sprintf("Error creating scheduled task: %v", err)
 		}
-		return fmt.Sprintf("Scheduled task created:\n- ID: %s\n- Name: %s\n- Schedule: %s\n- Tool: %s", job.ID, job.Name, job.Schedule, job.Tool)
+		return fmt.Sprintf("Scheduled task created:\n- ID: %s\n- Name: %s\n- Schedule: %s\n- Tag: %s\n- Tool: %s", job.ID, job.Name, job.Schedule, job.Tag, job.Tool)
 	}
 
 	return "Error: either 'prompt', 'message', or 'tool' is required"
 }
 
-// executeCronList lists all scheduled tasks
-func (a *Agent) executeCronList() string {
+// executeCronList lists all scheduled tasks, optionally filtered by tag
+func (a *Agent) executeCronList(args map[string]any) string {
 	if a.cronScheduler == nil {
 		return "Error: cron scheduler not available"
 	}
 
-	jobs := a.cronScheduler.ListJobs()
+	var jobs []*cronpkg.Job
+	tag, _ := args["tag"].(string)
+	
+	if tag != "" {
+		jobs = a.cronScheduler.ListJobsByTag(tag)
+	} else {
+		jobs = a.cronScheduler.ListJobs()
+	}
+	
 	if len(jobs) == 0 {
+		if tag != "" {
+			return fmt.Sprintf("No scheduled tasks with tag '%s'.", tag)
+		}
 		return "No scheduled tasks."
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Scheduled tasks (%d):\n\n", len(jobs)))
+	if tag != "" {
+		sb.WriteString(fmt.Sprintf("Scheduled tasks with tag '%s' (%d):\n\n", tag, len(jobs)))
+	} else {
+		sb.WriteString(fmt.Sprintf("Scheduled tasks (%d):\n\n", len(jobs)))
+	}
+	
 	for _, job := range jobs {
 		status := "enabled"
 		if !job.Enabled {
 			status = "paused"
 		}
 
-		sb.WriteString(fmt.Sprintf("- ID: %s\n  Name: %s\n  Schedule: %s\n  Status: %s\n", job.ID, job.Name, job.Schedule, status))
+		sb.WriteString(fmt.Sprintf("- ID: %s\n  Name: %s\n  Schedule: %s\n  Tag: %s\n  Status: %s\n", job.ID, job.Name, job.Schedule, job.Tag, status))
 		if job.Prompt != "" {
 			sb.WriteString(fmt.Sprintf("  Prompt: %s\n", job.Prompt))
 		}

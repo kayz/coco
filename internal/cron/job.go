@@ -10,6 +10,7 @@ import (
 type Job struct {
 	ID        string         `json:"id"`                  // Unique identifier
 	Name      string         `json:"name"`                // Human-readable name
+	Tag       string         `json:"tag,omitempty"`       // Job tag: "user-schedule" or "assistant-task"
 	Schedule  string         `json:"schedule"`            // Cron expression
 	Tool      string         `json:"tool,omitempty"`      // MCP tool to execute
 	Arguments map[string]any `json:"arguments,omitempty"` // Tool arguments
@@ -32,6 +33,7 @@ func (j *Job) Clone() *Job {
 	clone := &Job{
 		ID:        j.ID,
 		Name:      j.Name,
+		Tag:       j.Tag,
 		Schedule:  j.Schedule,
 		Tool:      j.Tool,
 		Message:   j.Message,

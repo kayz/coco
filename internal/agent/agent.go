@@ -659,18 +659,11 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 - file_trash: Move files to trash (for delete operations)
 - file_list_old: Find old files not modified for N days
 
-### Calendar (macOS)
-- calendar_today: List today's calendar events/meetings (NOT for answering date/time questions)
-- calendar_list_events: List upcoming events
-- calendar_create_event: Create new event
-- calendar_search: Search events
-- calendar_delete: Delete event
-
-### Reminders (macOS)
-- reminders_list: List pending reminders
-- reminders_add: Add new reminder
-- reminders_complete: Mark as complete
-- reminders_delete: Delete reminder
+### User Schedules & Reminders
+- Use cron_create with tag="user-schedule" to create user's personal schedules, reminders, and calendar events
+- Set the 'prompt' parameter to describe what you should remind the user about
+- Use cron_list with tag="user-schedule" to list only user's schedules
+- For assistant's background tasks (daily reports, etc.), use tag="assistant-task"
 
 ### Notes (macOS)
 - notes_list: List notes
@@ -759,7 +752,11 @@ Do NOT waste rounds — try clicking first, inspect only if it fails.
 4. **Full permission** - You have full permission to execute all tools
 5. **Be concise** - Short, helpful responses
 6. **NEVER claim success without tool execution** - If user asks to create/add/delete something, you MUST call the corresponding tool. Never say "已创建/已添加/已删除" unless you actually called the tool and it succeeded.
-7. **Date format for calendar** - When creating calendar events, use YYYY-MM-DD HH:MM format. Convert relative dates (明天/下周一) to absolute dates based on today's date.
+7. **User schedules with cron** - When user asks for calendar events, reminders, or schedules:
+   - Use cron_create with tag="user-schedule"
+   - Set a clear 'prompt' describing what to remind the user about
+   - Use 5-field cron format (minute hour day month weekday)
+   - Convert relative dates/time to cron expressions (e.g., 每天下午3点 → "0 15 * * *", 明天下午2:30 → calculate exact time and use cron)
 8. **CRITICAL: Cron job rules** - When user asks for periodic/scheduled tasks:
    - Call cron_create EXACTLY ONCE with the 'prompt' parameter.
    - Example: cron_create(name="motivation", schedule="43 * * * *", prompt="生成一条独特的编程激励鸡汤，鼓励用户写代码创造新产品")
@@ -1592,12 +1589,13 @@ func (a *Agent) buildToolsList() []Tool {
 		// === SCHEDULED TASKS (CRON) ===
 		{
 			Name:        "cron_create",
-			Description: "Create ONE scheduled task. Use 'prompt' to describe what the AI should do each time (generate text, search web, check weather, etc.). The AI runs a full conversation each trigger, so content is fresh every time. Use 'tool'+'arguments' only for raw MCP tool execution without AI. Schedule uses standard 5-field cron: minute hour day month weekday. Common examples: '0 9 * * *' (daily at 9am), '0 9 * * 1-5' (weekdays at 9am), '30 8 * * 1' (every Monday at 8:30am), '0 */2 * * *' (every 2 hours).",
+			Description: "Create ONE scheduled task. Use 'prompt' to describe what the AI should do each time (generate text, search web, check weather, etc.). The AI runs a full conversation each trigger, so content is fresh every time. Use 'tool'+'arguments' only for raw MCP tool execution without AI. Schedule uses standard 5-field cron: minute hour day month weekday. Common examples: '0 9 * * *' (daily at 9am), '0 9 * * 1-5' (weekdays at 9am), '30 8 * * 1' (every Monday at 8:30am), '0 */2 * * *' (every 2 hours). Use 'tag' parameter to categorize tasks: 'user-schedule' for user's personal schedule/reminders, 'assistant-task' for assistant's background tasks.",
 			InputSchema: jsonSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"name":      map[string]string{"type": "string", "description": "Human-readable task name"},
 					"schedule":  map[string]string{"type": "string", "description": "Cron expression (5-field: minute hour day month weekday). Examples: '0 9 * * *' (daily 9am), '0 9 * * 1-5' (weekdays 9am), '30 8 * * 1' (Monday 8:30am), '0 */2 * * *' (every 2 hours)"},
+					"tag":       map[string]string{"type": "string", "description": "Task tag: 'user-schedule' for user's personal schedule/reminders, 'assistant-task' for assistant's background tasks. Use 'user-schedule' when creating calendar/events/reminders for the user."},
 					"prompt":    map[string]string{"type": "string", "description": "What the AI should do each time this job triggers. AI runs a full conversation and sends the result to the user. Example: '生成一条独特的编程激励鸡汤，鼓励用户写代码创造新产品'"},
 					"tool":      map[string]string{"type": "string", "description": "MCP tool to execute periodically (for raw tool execution without AI)"},
 					"arguments": map[string]string{"type": "object", "description": "Arguments for the tool (when using tool parameter)"},
@@ -1607,8 +1605,13 @@ func (a *Agent) buildToolsList() []Tool {
 		},
 		{
 			Name:        "cron_list",
-			Description: "List all scheduled tasks with their status, schedule, and last run time",
-			InputSchema: jsonSchema(map[string]any{"type": "object", "properties": map[string]any{}}),
+			Description: "List all scheduled tasks with their status, schedule, and last run time. Use 'tag' parameter to filter by tag (e.g., 'user-schedule' to list only user schedules).",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"tag": map[string]string{"type": "string", "description": "Filter by tag: 'user-schedule' or 'assistant-task' (optional)"},
+				},
+			}),
 		},
 		{
 			Name:        "cron_delete",
@@ -1688,7 +1691,7 @@ func (a *Agent) executeTool(ctx context.Context, name string, input json.RawMess
 	case "cron_create":
 		return a.executeCronCreate(args)
 	case "cron_list":
-		return a.executeCronList()
+		return a.executeCronList(args)
 	case "cron_delete":
 		return a.executeCronDelete(args)
 	case "cron_pause":
