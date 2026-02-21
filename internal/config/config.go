@@ -36,6 +36,7 @@ type Config struct {
 	Security  SecurityConfig  `yaml:"security"`
 	Logging   LoggingConfig   `yaml:"logging"`
 	AI        AIConfig        `yaml:"ai,omitempty"`
+	Embedding EmbeddingConfig `yaml:"embedding,omitempty"`
 	Platforms PlatformConfig  `yaml:"platforms,omitempty"`
 	Mode      string          `yaml:"mode,omitempty"` // "relay" or "router"
 	Relay     RelayConfig     `yaml:"relay,omitempty"`
@@ -92,6 +93,14 @@ type AIConfig struct {
 	APIKey   string `yaml:"api_key,omitempty"`
 	BaseURL  string `yaml:"base_url,omitempty"`
 	Model    string `yaml:"model,omitempty"`
+}
+
+type EmbeddingConfig struct {
+	Provider string `yaml:"provider,omitempty"`
+	APIKey   string `yaml:"api_key,omitempty"`
+	BaseURL  string `yaml:"base_url,omitempty"`
+	Model    string `yaml:"model,omitempty"`
+	Enabled  bool   `yaml:"enabled,omitempty"`
 }
 
 type PlatformConfig struct {
@@ -245,6 +254,12 @@ func DefaultConfig() *Config {
 		Logging: LoggingConfig{
 			Level: "info",
 			File:  "/tmp/lingti-bot.log",
+		},
+		AI: AIConfig{},
+		Embedding: EmbeddingConfig{
+			Provider: "qwen",
+			Model:    "text-embedding-v3",
+			Enabled:  false,
 		},
 		Search: SearchConfig{
 			PrimaryEngine:   "metaso",

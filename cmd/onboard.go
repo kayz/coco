@@ -15,22 +15,27 @@ import (
 )
 
 var (
-	onboardProvider       string
-	onboardAPIKey         string
-	onboardBaseURL        string
-	onboardModel          string
-	onboardPlatform       string
-	onboardMode           string
-	onboardReset          bool
-	onboardRelayUserID    string
-	onboardMetasoAPIKey   string
-	onboardTavilyAPIKey   string
-	onboardSearchEngine   string
-	onboardAutoSearch     bool
-	onboardCustomEngine   string
-	onboardCustomType     string
-	onboardCustomAPIKey   string
-	onboardCustomBaseURL  string
+	onboardProvider             string
+	onboardAPIKey               string
+	onboardBaseURL              string
+	onboardModel                string
+	onboardPlatform             string
+	onboardMode                 string
+	onboardReset                bool
+	onboardRelayUserID          string
+	onboardMetasoAPIKey         string
+	onboardTavilyAPIKey         string
+	onboardSearchEngine         string
+	onboardAutoSearch           bool
+	onboardCustomEngine         string
+	onboardCustomType           string
+	onboardCustomAPIKey         string
+	onboardCustomBaseURL        string
+	onboardEmbeddingProvider    string
+	onboardEmbeddingAPIKey      string
+	onboardEmbeddingBaseURL     string
+	onboardEmbeddingModel       string
+	onboardEmbeddingEnabled     bool
 	// WeCom
 	onboardWeComCorpID  string
 	onboardWeComAgentID string
@@ -125,6 +130,13 @@ func init() {
 	onboardCmd.Flags().StringVar(&onboardMode, "mode", "", "Connection mode: relay, router")
 	onboardCmd.Flags().BoolVar(&onboardReset, "reset", false, "Clear existing config and start fresh")
 	onboardCmd.Flags().StringVar(&onboardRelayUserID, "relay-user-id", "", "Relay user ID (from /whoami)")
+
+	// Embedding
+	onboardCmd.Flags().StringVar(&onboardEmbeddingProvider, "embedding-provider", "", "Embedding provider: qwen, openai")
+	onboardCmd.Flags().StringVar(&onboardEmbeddingAPIKey, "embedding-api-key", "", "Embedding API key")
+	onboardCmd.Flags().StringVar(&onboardEmbeddingBaseURL, "embedding-base-url", "", "Custom embedding API base URL")
+	onboardCmd.Flags().StringVar(&onboardEmbeddingModel, "embedding-model", "", "Embedding model name")
+	onboardCmd.Flags().BoolVar(&onboardEmbeddingEnabled, "embedding-enabled", false, "Enable memory system with RAG")
 
 	// Search
 	onboardCmd.Flags().StringVar(&onboardMetasoAPIKey, "metaso-api-key", "", "Metaso search API key")
@@ -276,7 +288,8 @@ func runOnboard(cmd *cobra.Command, args []string) {
 func hasOnboardFlags(_ *cobra.Command) bool {
 	return onboardProvider != "" || onboardAPIKey != "" || onboardPlatform != "" ||
 		onboardMetasoAPIKey != "" || onboardTavilyAPIKey != "" || onboardSearchEngine != "" ||
-		onboardCustomEngine != ""
+		onboardCustomEngine != "" || onboardEmbeddingProvider != "" || onboardEmbeddingAPIKey != "" ||
+		onboardEmbeddingModel != ""
 }
 
 func applyOnboardFlags(cfg *config.Config, cmd *cobra.Command) {
@@ -291,6 +304,23 @@ func applyOnboardFlags(cfg *config.Config, cmd *cobra.Command) {
 	}
 	if onboardModel != "" {
 		cfg.AI.Model = onboardModel
+	}
+
+	// Embedding config
+	if onboardEmbeddingProvider != "" {
+		cfg.Embedding.Provider = onboardEmbeddingProvider
+	}
+	if onboardEmbeddingAPIKey != "" {
+		cfg.Embedding.APIKey = onboardEmbeddingAPIKey
+	}
+	if onboardEmbeddingBaseURL != "" {
+		cfg.Embedding.BaseURL = onboardEmbeddingBaseURL
+	}
+	if onboardEmbeddingModel != "" {
+		cfg.Embedding.Model = onboardEmbeddingModel
+	}
+	if cmd.Flags().Changed("embedding-enabled") {
+		cfg.Embedding.Enabled = onboardEmbeddingEnabled
 	}
 	if onboardMode != "" {
 		cfg.Mode = onboardMode
@@ -520,6 +550,7 @@ func runInteractiveWizard(cfg *config.Config) {
 	}
 
 	stepAIProvider(cfg)
+	stepEmbeddingConfig(cfg)
 	stepPlatform(cfg)
 	stepConnectionMode(cfg)
 	stepSearchConfig(cfg)
@@ -970,8 +1001,72 @@ func stepRelayConfig(cfg *config.Config) {
 	}
 }
 
+func stepEmbeddingConfig(cfg *config.Config) {
+	fmt.Println("\n  Step 2/5: Memory System (optional)")
+	fmt.Println("  Memory system uses RAG to remember conversations and user preferences.")
+
+	idx := promptSelect("Would you like to enable the memory system?", []string{
+		"Yes, enable memory system",
+		"No, skip memory configuration",
+	}, 1)
+
+	if idx == 1 {
+		cfg.Embedding.Enabled = false
+		fmt.Println("\n  > Memory configuration skipped")
+		return
+	}
+
+	cfg.Embedding.Enabled = true
+
+	fmt.Println("\n  Configure Embedding Provider")
+	embeddingOptions := []string{
+		"qwen    (Tongyi Qianwen, recommended for Chinese)",
+		"openai  (OpenAI, for English)",
+	}
+	defIdx := 0
+	if cfg.Embedding.Provider == "openai" {
+		defIdx = 1
+	}
+	embIdx := promptSelect("Select embedding provider:", embeddingOptions, defIdx)
+	if embIdx == 0 {
+		cfg.Embedding.Provider = "qwen"
+	} else {
+		cfg.Embedding.Provider = "openai"
+	}
+
+	fmt.Println()
+	defKey := cfg.Embedding.APIKey
+	if defKey == "" {
+		defKey = cfg.AI.APIKey
+	}
+	if cfg.Embedding.Provider == "qwen" {
+		fmt.Println("  Qwen Embedding uses the same API key as Qwen chat by default.")
+	} else {
+		fmt.Println("  OpenAI Embedding uses the same API key as OpenAI chat by default.")
+	}
+	cfg.Embedding.APIKey = promptText("Embedding API Key (leave empty to use chat API key)", defKey)
+
+	defModel := cfg.Embedding.Model
+	if defModel == "" {
+		if cfg.Embedding.Provider == "qwen" {
+			defModel = "text-embedding-v3"
+		} else {
+			defModel = "text-embedding-3-small"
+		}
+	}
+	cfg.Embedding.Model = promptText("Embedding Model", defModel)
+
+	defBaseURL := cfg.Embedding.BaseURL
+	if defBaseURL == "" {
+		defBaseURL = cfg.AI.BaseURL
+	}
+	cfg.Embedding.BaseURL = promptText("Embedding Base URL (leave empty to use chat base URL)", defBaseURL)
+
+	fmt.Printf("\n  > Memory system configured: %s / %s\n", cfg.Embedding.Provider, cfg.Embedding.Model)
+}
+
 func stepSearchConfig(cfg *config.Config) {
-	fmt.Println("\n  Step 4/4: Search Engines (optional)")
+	fmt.Println("\n  Step 5/5: Search Engines (optional)")
 
 	idx := promptSelect("Would you like to configure search engines?", []string{
 		"Yes, configure search engines",
@@ -1081,6 +1176,17 @@ func printOnboardSummary(cfg *config.Config) {
 	fmt.Println("  ───────────────────────────────────")
 	fmt.Printf("  > Configuration saved to %s\n", config.ConfigPath())
 	fmt.Println()
+
+	// Embedding configuration summary
+	if cfg.Embedding.Enabled {
+		fmt.Println("  Memory system enabled:")
+		fmt.Printf("    - Provider: %s\n", cfg.Embedding.Provider)
+		fmt.Printf("    - Model: %s\n", cfg.Embedding.Model)
+		if cfg.Embedding.APIKey != "" {
+			fmt.Printf("    - API Key: %s\n", maskKey(cfg.Embedding.APIKey))
+		}
+		fmt.Println()
+	}
 
 	// Search configuration summary
 	hasSearch := false

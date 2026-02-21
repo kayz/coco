@@ -49,6 +49,7 @@ func getExecutableDir() string {
 type Agent struct {
 	provider           Provider
 	memory             *ConversationMemory
+	ragMemory          *RAGMemory
 	sessions           *SessionStore
 	autoApprove        bool
 	customInstructions string
@@ -75,6 +76,7 @@ type Config struct {
 	CustomInstructions string   // Additional instructions appended to system prompt (optional)
 	AllowedPaths       []string // Restrict file/shell operations to these directories (empty = no restriction)
 	DisableFileTools   bool     // Completely disable all file operation tools
+	Embedding          config.EmbeddingConfig
 }
 
 // loadPromptFile reads a prompt file from the project root
@@ -141,9 +143,20 @@ func New(cfg Config) (*Agent, error) {
 		log.Printf("[AGENT] Failed to initialize search manager: %v", err)
 	}
 
+	var ragMemory *RAGMemory
+	if cfg.Embedding.Enabled {
+		ragMemory, err = NewRAGMemory(cfg.Embedding)
+		if err != nil {
+			log.Printf("[AGENT] Failed to initialize RAG memory: %v", err)
+		}
+	} else {
+		ragMemory = &RAGMemory{enabled: false}
+	}
+
 	agent := &Agent{
 		provider:           provider,
 		memory:             memory,
+		ragMemory:          ragMemory,
 		sessions:           NewSessionStore(),
 		autoApprove:        cfg.AutoApprove,
 		customInstructions: cfg.CustomInstructions,
@@ -552,96 +565,14 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 	history := a.memory.GetHistory(convKey)
 	logger.Trace("[Agent] Conversation key: %s, history messages: %d", convKey, len(history))
 
-	// Create messages with history, CLEAR ATTACHMENTS from historical messages!
+	// Create messages with history
 	messages := make([]Message, 0, len(history)+1)
-	for _, histMsg := range history {
-		// Make a copy and clear attachments
-		cleanMsg := histMsg
-		cleanMsg.Attachments = nil
-		messages = append(messages, cleanMsg)
-	}
+	messages = append(messages, history...)
 	
-	// Process attachments: keep images as attachments, convert text files to text content
-	var attachments []Attachment
-	var fileContentText string
-	
-	for _, routerAttach := range msg.Attachments {
-		if routerAttach.Type == "image" {
-			// Keep images as attachments
-			attachments = append(attachments, Attachment{
-				Type:     routerAttach.Type,
-				Data:     routerAttach.Data,
-				MIMEType: routerAttach.MIMEType,
-			})
-		} else if routerAttach.Type == "file" {
-			// Check file size (limit to 500KB for text content)
-			const maxFileSize = 500 * 1024
-			fileSize := len(routerAttach.Data)
-			
-			// Determine if this is a text-based file we can process
-			isTextFile := false
-			fileExt := ""
-			if msg.FileName != "" {
-				fileExt = strings.ToLower(strings.TrimPrefix(filepath.Ext(msg.FileName), "."))
-			}
-			
-			// List of text-based file extensions we support
-			textExtensions := map[string]bool{
-				"txt": true, "md": true, "markdown": true,
-				"json": true, "xml": true, "yaml": true, "yml": true, "toml": true,
-				"ini": true, "conf": true, "config": true, "env": true,
-				"csv": true, "tsv": true,
-				"sql": true,
-				"go": true, "py": true, "js": true, "ts": true, "jsx": true, "tsx": true,
-				"java": true, "c": true, "cpp": true, "h": true, "hpp": true,
-				"cs": true, "php": true, "rb": true, "swift": true, "kt": true, "kts": true,
-				"rs": true, "sh": true, "bash": true, "ps1": true, "bat": true, "cmd": true,
-				"html": true, "htm": true, "css": true, "scss": true, "less": true,
-				"log": true, "gitignore": true, "dockerfile": true, "makefile": true,
-			}
-			
-			// Check MIME type or file extension
-			if strings.HasPrefix(routerAttach.MIMEType, "text/") ||
-			   strings.Contains(routerAttach.MIMEType, "json") ||
-			   strings.Contains(routerAttach.MIMEType, "xml") ||
-			   strings.Contains(routerAttach.MIMEType, "yaml") ||
-			   (fileExt != "" && textExtensions[fileExt]) ||
-			   (msg.FileName != "" && textExtensions[strings.ToLower(msg.FileName)]) {
-				isTextFile = true
-			}
-			
-			if isTextFile {
-				if fileSize > maxFileSize {
-					// File too large, show warning and truncate
-					fileContentText += fmt.Sprintf("\n\n--- ⚠️ 文件过大 (%d bytes，已截断) ---\n文件名: %s\n内容 (前 %d bytes):\n%s\n", 
-						fileSize, msg.FileName, maxFileSize, string(routerAttach.Data[:maxFileSize]))
-				} else {
-					// Process normally
-					fileContentText += fmt.Sprintf("\n\n--- 文件内容 ---\n文件名: %s\n内容:\n%s\n", 
-						msg.FileName, string(routerAttach.Data))
-				}
-			} else {
-				// Unsupported file type
-				fileContentText += fmt.Sprintf("\n\n--- 📎 文件附件 ---\n文件名: %s\n类型: %s\n大小: %d bytes\n注意: 此文件类型无法直接解析，请使用文本格式的文件。\n", 
-					msg.FileName, routerAttach.MIMEType, fileSize)
-			}
-		}
-	}
-	
-	// Combine original text with file content
-	finalContent := msg.Text
-	if fileContentText != "" {
-		if finalContent != "" {
-			finalContent += fileContentText
-		} else {
-			finalContent = fileContentText
-		}
-	}
-	
+	// Add current message
 	messages = append(messages, Message{
-		Role:        "user",
-		Content:     finalContent,
-		Attachments: attachments,
+		Role:    "user",
+		Content: msg.Text,
 	})
 
 	// Get system info for context
@@ -676,6 +607,32 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 	// Fallback to default if files not found
 	if aboutMe == "" {
 		aboutMe = "You are 灵缇 (Lingti), a helpful AI assistant running on the user's computer."
+	}
+	
+	// Retrieve relevant memories from RAG if enabled
+	var memoriesSection string
+	var preferencesSection string
+	if a.ragMemory != nil && a.ragMemory.IsEnabled() {
+		memories, err := a.ragMemory.SearchMemories(ctx, msg.Text, 5)
+		if err == nil && len(memories) > 0 {
+			memoriesSection = "\n\n## Relevant Memories\nHere are some relevant memories from previous conversations that might help you respond:\n"
+			for i, mem := range memories {
+				memoriesSection += fmt.Sprintf("%d. [%s] %s\n", i+1, mem.Type, mem.Content)
+			}
+			logger.Debug("[Agent] Retrieved %d relevant memories", len(memories))
+		}
+
+		// Retrieve user preferences
+		preferences, err := a.ragMemory.SearchMemories(ctx, "user preferences communication style tone format", 3)
+		if err == nil && len(preferences) > 0 {
+			preferencesSection = "\n\n## User Preferences\nHere are some known preferences about this user that you should follow:\n"
+			for i, pref := range preferences {
+				if pref.Type == "preference" {
+					preferencesSection += fmt.Sprintf("%d. %s\n", i+1, pref.Content)
+				}
+			}
+			logger.Debug("[Agent] Retrieved %d user preferences", len(preferences))
+		}
 	}
 	
 	// System prompt with actual paths
@@ -813,6 +770,14 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 		systemPrompt += formatSkillsSection()
 	}
 
+	if memoriesSection != "" {
+		systemPrompt += memoriesSection
+	}
+
+	if preferencesSection != "" {
+		systemPrompt += preferencesSection
+	}
+
 	if a.customInstructions != "" {
 		systemPrompt += "\n\n## Custom Instructions\n" + a.customInstructions
 	}
@@ -885,11 +850,38 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 		logger.Warn("[Agent] Tool loop hit max rounds (%d), forcing stop (user: %s)", maxToolRounds, msg.Username)
 	}
 
-	// Save conversation to memory (NO ATTACHMENTS!)
+	// Save conversation to memory
 	a.memory.AddExchange(convKey,
-		Message{Role: "user", Content: finalContent},
+		Message{Role: "user", Content: msg.Text},
 		Message{Role: "assistant", Content: resp.Content},
 	)
+
+	// Save conversation to RAG memory for long-term recall
+	if a.ragMemory != nil && a.ragMemory.IsEnabled() {
+		conversationText := fmt.Sprintf("User: %s\nAssistant: %s", msg.Text, resp.Content)
+		err := a.ragMemory.AddMemory(ctx, MemoryItem{
+			ID:        fmt.Sprintf("conv-%s-%d", convKey, time.Now().Unix()),
+			Type:      "conversation",
+			Content:   conversationText,
+			Metadata: map[string]string{
+				"platform":  msg.Platform,
+				"channel":   msg.ChannelID,
+				"user":      msg.UserID,
+				"timestamp": time.Now().Format(time.RFC3339),
+			},
+		})
+		if err != nil {
+			logger.Warn("[Agent] Failed to save conversation to RAG memory: %v", err)
+		} else {
+			logger.Debug("[Agent] Conversation saved to RAG memory")
+		}
+
+		// Extract and learn user preferences (every 5th conversation)
+		history := a.memory.GetHistory(convKey)
+		if len(history) > 0 && len(history)%4 == 0 {
+			a.learnUserPreferences(ctx, convKey, msg)
+		}
+	}
 
 	// Check if this is the first message and add report notification
 	if a.isFirstMessage(convKey) {
@@ -2284,4 +2276,84 @@ func (a *Agent) executeWebSearchWithManager(ctx context.Context, query string) s
 		return fmt.Sprintf("Error searching: %v", err)
 	}
 	return search.FormatSearchResults(resp)
+}
+
+// learnUserPreferences analyzes recent conversations and extracts user preferences
+func (a *Agent) learnUserPreferences(ctx context.Context, convKey string, msg router.Message) {
+	if a.ragMemory == nil || !a.ragMemory.IsEnabled() {
+		return
+	}
+
+	history := a.memory.GetHistory(convKey)
+	if len(history) < 2 {
+		return
+	}
+
+	// Build conversation history text
+	var conversationText strings.Builder
+	conversationText.WriteString("Recent conversation history:\n\n")
+	for i, m := range history {
+		if m.Role == "user" {
+			conversationText.WriteString(fmt.Sprintf("User: %s\n", m.Content))
+		} else {
+			conversationText.WriteString(fmt.Sprintf("Assistant: %s\n", m.Content))
+		}
+		if i >= 10 {
+			break
+		}
+	}
+
+	// Create a prompt for the AI to extract preferences
+	preferencePrompt := fmt.Sprintf(`Analyze the following conversation history and extract the user's preferences. Focus on:
+1. Communication style (formal/informal, concise/detailed)
+2. Preferred response format (bullet points, paragraphs, code blocks)
+3. Tone preferences (friendly, professional, humorous)
+4. Any specific likes or dislikes mentioned
+5. Technical vs non-technical preferences
+
+Conversation:
+%s
+
+Extract ONLY the preferences, one per line, starting with "- ". Keep it concise and actionable.`, conversationText.String())
+
+	// Use AI to extract preferences
+	resp, err := a.provider.Chat(ctx, ChatRequest{
+		Messages: []Message{
+			{Role: "user", Content: preferencePrompt},
+		},
+		SystemPrompt: "You are an expert at analyzing conversations and extracting user preferences. Be concise and specific.",
+		Tools:        nil,
+		MaxTokens:    500,
+	})
+	if err != nil {
+		logger.Warn("[Agent] Failed to extract user preferences: %v", err)
+		return
+	}
+
+	// Parse and save preferences
+	lines := strings.Split(resp.Content, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
+			preference := strings.TrimSpace(line[2:])
+			if preference != "" {
+				err := a.ragMemory.AddMemory(ctx, MemoryItem{
+					ID:        fmt.Sprintf("pref-%s-%d", convKey, time.Now().UnixNano()),
+					Type:      "preference",
+					Content:   preference,
+					Metadata: map[string]string{
+						"platform":  msg.Platform,
+						"channel":   msg.ChannelID,
+						"user":      msg.UserID,
+						"timestamp": time.Now().Format(time.RFC3339),
+					},
+				})
+				if err != nil {
+					logger.Warn("[Agent] Failed to save preference: %v", err)
+				} else {
+					logger.Debug("[Agent] Saved user preference: %s", preference)
+				}
+			}
+		}
+	}
 }

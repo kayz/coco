@@ -542,6 +542,11 @@ func runRouter(cmd *cobra.Command, args []string) {
 		logger.Info("Loaded custom instructions from %s (%d bytes)", aiInstructions, len(data))
 	}
 
+	var embeddingCfg config.EmbeddingConfig
+	if savedCfg, err := config.Load(); err == nil {
+		embeddingCfg = savedCfg.Embedding
+	}
+
 	// Create the AI agent
 	aiAgent, err := agent.New(agent.Config{
 		Provider:           aiProvider,
@@ -552,6 +557,7 @@ func runRouter(cmd *cobra.Command, args []string) {
 		CustomInstructions: customInstructions,
 		AllowedPaths:       loadAllowedPaths(),
 		DisableFileTools:   loadDisableFileTools(),
+		Embedding:          embeddingCfg,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating agent: %v\n", err)
