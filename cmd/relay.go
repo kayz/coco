@@ -9,19 +9,20 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/pltanton/lingti-bot/internal/agent"
-	"github.com/pltanton/lingti-bot/internal/config"
-	cronpkg "github.com/pltanton/lingti-bot/internal/cron"
-	"github.com/pltanton/lingti-bot/internal/platforms/relay"
-	"github.com/pltanton/lingti-bot/internal/router"
-	"github.com/pltanton/lingti-bot/internal/tools"
-	"github.com/pltanton/lingti-bot/internal/voice"
+	"github.com/kayz/coco/internal/agent"
+	"github.com/kayz/coco/internal/config"
+	cronpkg "github.com/kayz/coco/internal/cron"
+	"github.com/kayz/coco/internal/platforms/relay"
+	"github.com/kayz/coco/internal/router"
+	"github.com/kayz/coco/internal/tools"
+	"github.com/kayz/coco/internal/voice"
 	"github.com/spf13/cobra"
 )
 
 var (
 	relayUserID         string
 	relayPlatform       string
+	relayToken          string
 	relayServerURL      string
 	relayWebhookURL     string
 	relayUseMediaProxy  bool
@@ -47,16 +48,16 @@ var (
 var relayCmd = &cobra.Command{
 	Use:   "relay",
 	Short: "Connect to the cloud relay service",
-	Long: `Connect to the lingti-bot cloud relay service to process messages
+	Long: `Connect to the coco cloud relay service to process messages
 using your local AI API key.
 
-This allows you to use the official lingti-bot service on Feishu/Slack/WeChat
+This allows you to use the official coco service on Feishu/Slack/WeChat
 without registering your own bot application.
 
 User Flow (Feishu/Slack/WeChat):
-  1. Follow the official lingti-bot on Feishu/Slack/WeChat
+  1. Follow the official coco on Feishu/Slack/WeChat
   2. Send /whoami to get your user ID
-  3. Run: lingti-bot relay --user-id <ID> --platform feishu
+  3. Run: coco relay --user-id <ID> --platform feishu
   4. Messages are processed locally with your AI API key
   5. Responses are sent back through the relay service
 
@@ -64,7 +65,7 @@ WeCom Cloud Relay:
   For WeCom, no user-id is needed - just provide your credentials.
   This command handles both callback verification AND message processing.
 
-  lingti-bot relay --platform wecom \
+  coco relay --platform wecom \
     --wecom-corp-id YOUR_CORP_ID \
     --wecom-agent-id YOUR_AGENT_ID \
     --wecom-secret YOUR_SECRET \
@@ -74,7 +75,7 @@ WeCom Cloud Relay:
     --api-key YOUR_API_KEY
 
   1. Run this command first
-  2. Configure callback URL in WeCom: https://bot.lingti.com/wecom
+  2. Configure callback URL in WeCom: https://keeper.kayz.com/wecom
   3. Save config in WeCom - verification will succeed automatically
   4. Messages will be processed with your AI provider
 
@@ -107,8 +108,9 @@ func init() {
 
 	relayCmd.Flags().StringVar(&relayUserID, "user-id", "", "User ID from /whoami (required, or RELAY_USER_ID env)")
 	relayCmd.Flags().StringVar(&relayPlatform, "platform", "", "Platform: feishu, slack, wechat, or wecom (required, or RELAY_PLATFORM env)")
-	relayCmd.Flags().StringVar(&relayServerURL, "server", "", "WebSocket URL (default: wss://bot.lingti.com/ws, or RELAY_SERVER_URL env)")
-	relayCmd.Flags().StringVar(&relayWebhookURL, "webhook", "", "Webhook URL (default: https://bot.lingti.com/webhook, or RELAY_WEBHOOK_URL env)")
+	relayCmd.Flags().StringVar(&relayToken, "token", "", "Auth token for Keeper connection (or RELAY_TOKEN env)")
+	relayCmd.Flags().StringVar(&relayServerURL, "server", "", "WebSocket URL (default: wss://keeper.kayz.com/ws, or RELAY_SERVER_URL env)")
+	relayCmd.Flags().StringVar(&relayWebhookURL, "webhook", "", "Webhook URL (default: https://keeper.kayz.com/webhook, or RELAY_WEBHOOK_URL env)")
 	relayCmd.Flags().BoolVar(&relayUseMediaProxy, "use-media-proxy", false, "Proxy media download/upload through relay server")
 	relayCmd.Flags().StringVar(&relayAIProvider, "provider", "", "AI provider: claude, deepseek, kimi, qwen (or AI_PROVIDER env)")
 	relayCmd.Flags().StringVar(&relayAPIKey, "api-key", "", "AI API key (or AI_API_KEY env)")
@@ -144,6 +146,9 @@ func runRelay(cmd *cobra.Command, args []string) {
 	}
 	if relayWebhookURL == "" {
 		relayWebhookURL = os.Getenv("RELAY_WEBHOOK_URL")
+	}
+	if relayToken == "" {
+		relayToken = os.Getenv("RELAY_TOKEN")
 	}
 	if !relayUseMediaProxy {
 		if os.Getenv("RELAY_USE_MEDIA_PROXY") == "true" || os.Getenv("RELAY_USE_MEDIA_PROXY") == "1" {
@@ -237,6 +242,9 @@ func runRelay(cmd *cobra.Command, args []string) {
 		if relayWebhookURL == "" && savedCfg.Relay.WebhookURL != "" {
 			relayWebhookURL = savedCfg.Relay.WebhookURL
 		}
+		if relayToken == "" && savedCfg.Relay.Token != "" {
+			relayToken = savedCfg.Relay.Token
+		}
 		if !relayUseMediaProxy && savedCfg.Relay.UseMediaProxy {
 			relayUseMediaProxy = savedCfg.Relay.UseMediaProxy
 		}
@@ -314,7 +322,7 @@ func runRelay(cmd *cobra.Command, args []string) {
 		}
 		if len(missing) > 0 {
 			fmt.Fprintf(os.Stderr, "Error: WeCom credentials required for cloud relay: %v\n", missing)
-			fmt.Fprintln(os.Stderr, "Configure callback URL in WeCom: https://bot.lingti.com/wecom")
+			fmt.Fprintln(os.Stderr, "Configure callback URL in WeCom: https://keeper.kayz.com/wecom")
 			os.Exit(1)
 		}
 	}
@@ -371,7 +379,7 @@ func runRelay(cmd *cobra.Command, args []string) {
 	if exeDir == "" {
 		exeDir = os.TempDir()
 	}
-	cronPath := filepath.Join(exeDir, ".lingti.db")
+	cronPath := filepath.Join(exeDir, ".coco.db")
 	cronStore, err := cronpkg.NewStore(cronPath)
 	if err != nil {
 		log.Fatalf("Failed to open cron store: %v", err)
@@ -402,6 +410,7 @@ func runRelay(cmd *cobra.Command, args []string) {
 	relayPlatformInstance, err := relay.New(relay.Config{
 		UserID:           relayUserID,
 		Platform:         relayPlatform,
+		Token:            relayToken,
 		ServerURL:        relayServerURL,
 		WebhookURL:       relayWebhookURL,
 		UseMediaProxy:    relayUseMediaProxy,

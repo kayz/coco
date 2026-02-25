@@ -7,10 +7,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/pltanton/lingti-bot/internal/agent"
-	"github.com/pltanton/lingti-bot/internal/logger"
-	"github.com/pltanton/lingti-bot/internal/router"
-	"github.com/pltanton/lingti-bot/internal/voice"
+	"github.com/kayz/coco/internal/agent"
+	"github.com/kayz/coco/internal/logger"
+	"github.com/kayz/coco/internal/router"
+	"github.com/kayz/coco/internal/voice"
 	"github.com/spf13/cobra"
 )
 
@@ -37,7 +37,7 @@ It supports multiple speech providers:
 Environment variables:
   - VOICE_PROVIDER: Speech provider (system, openai, elevenlabs)
   - VOICE_API_KEY: API key for cloud providers
-  - WAKE_WORD: Wake word for activation (e.g., "hey lingti")
+  - WAKE_WORD: Wake word for activation (e.g., "hey coco")
   - AI_API_KEY: API Key for the AI provider`,
 	Run: runTalk,
 }

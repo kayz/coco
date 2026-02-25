@@ -10,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pltanton/lingti-bot/internal/agent"
-	"github.com/pltanton/lingti-bot/internal/logger"
-	"github.com/pltanton/lingti-bot/internal/router"
-	"github.com/pltanton/lingti-bot/internal/voice"
+	"github.com/kayz/coco/internal/agent"
+	"github.com/kayz/coco/internal/logger"
+	"github.com/kayz/coco/internal/router"
+	"github.com/kayz/coco/internal/voice"
 	"github.com/spf13/cobra"
 )
 
@@ -37,10 +37,10 @@ This mode allows you to:
   - Optionally speaks the response back
 
 Example:
-  lingti-bot voice                    # Default 5 second recording
-  lingti-bot voice -d 10              # 10 second recording
-  lingti-bot voice --speak            # Speak responses aloud
-  lingti-bot voice --provider openai  # Use OpenAI Whisper
+  coco voice                    # Default 5 second recording
+  coco voice -d 10              # 10 second recording
+  coco voice --speak            # Speak responses aloud
+  coco voice --provider openai  # Use OpenAI Whisper
 
 Environment variables:
   - VOICE_PROVIDER: STT/TTS provider (system, openai)
@@ -125,7 +125,7 @@ func runVoice(cmd *cobra.Command, args []string) {
 			fmt.Println("📦 Whisper model not found. Downloading base model (141MB)...")
 			if err := voice.DownloadWhisperModel("base"); err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to download model: %v\n", err)
-				fmt.Fprintln(os.Stderr, "Run 'lingti-bot setup' for manual installation instructions")
+				fmt.Fprintln(os.Stderr, "Run 'coco setup' for manual installation instructions")
 				os.Exit(1)
 			}
 			fmt.Println("✅ Model downloaded successfully")
@@ -140,7 +140,7 @@ func runVoice(cmd *cobra.Command, args []string) {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating voice recorder: %v\n", err)
-		fmt.Fprintln(os.Stderr, "Run 'lingti-bot setup' for installation instructions")
+		fmt.Fprintln(os.Stderr, "Run 'coco setup' for installation instructions")
 		os.Exit(1)
 	}
 

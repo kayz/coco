@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/pltanton/lingti-bot/internal/router"
+	"github.com/kayz/coco/internal/router"
 )
 
 // Platform implements router.Platform for WhatsApp Business Cloud API
@@ -40,7 +40,7 @@ func New(cfg Config) (*Platform, error) {
 		return nil, fmt.Errorf("WhatsApp phone number ID is required")
 	}
 	if cfg.VerifyToken == "" {
-		cfg.VerifyToken = "lingti-bot-verify"
+		cfg.VerifyToken = "coco-verify"
 	}
 	if cfg.WebhookPort == 0 {
 		cfg.WebhookPort = 8084

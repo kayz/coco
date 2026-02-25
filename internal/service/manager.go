@@ -10,18 +10,18 @@ import (
 )
 
 const (
-	ServiceName = "com.lingti.bot"
+	ServiceName = "com.kayz.coco"
 )
 
 // Paths returns the installation paths for the current platform
 func Paths() (binaryPath, configPath string) {
 	switch runtime.GOOS {
 	case "darwin":
-		return "/Library/PrivilegedHelperTools/com.lingti.bot",
-			"/Library/LaunchDaemons/com.lingti.bot.plist"
+		return "/Library/PrivilegedHelperTools/com.kayz.coco",
+			"/Library/LaunchDaemons/com.kayz.coco.plist"
 	case "linux":
-		return "/usr/local/bin/lingti-bot",
-			"/etc/systemd/system/lingti-bot.service"
+		return "/usr/local/bin/coco",
+			"/etc/systemd/system/coco.service"
 	default:
 		return "", ""
 	}
@@ -44,7 +44,7 @@ func IsRunning() bool {
 		cmd := exec.Command("launchctl", "list", ServiceName)
 		return cmd.Run() == nil
 	case "linux":
-		cmd := exec.Command("systemctl", "is-active", "--quiet", "lingti-bot")
+		cmd := exec.Command("systemctl", "is-active", "--quiet", "coco")
 		return cmd.Run() == nil
 	default:
 		return false
@@ -87,7 +87,7 @@ func Uninstall() error {
 	case "darwin":
 		exec.Command("launchctl", "unload", configPath).Run()
 	case "linux":
-		exec.Command("systemctl", "disable", "lingti-bot").Run()
+		exec.Command("systemctl", "disable", "coco").Run()
 	}
 
 	// Remove files
@@ -104,7 +104,7 @@ func Start() error {
 		_, configPath := Paths()
 		return exec.Command("launchctl", "load", configPath).Run()
 	case "linux":
-		return exec.Command("systemctl", "start", "lingti-bot").Run()
+		return exec.Command("systemctl", "start", "coco").Run()
 	default:
 		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
@@ -117,7 +117,7 @@ func Stop() error {
 		_, configPath := Paths()
 		return exec.Command("launchctl", "unload", configPath).Run()
 	case "linux":
-		return exec.Command("systemctl", "stop", "lingti-bot").Run()
+		return exec.Command("systemctl", "stop", "coco").Run()
 	default:
 		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
@@ -177,7 +177,7 @@ func enableService() error {
 		if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
 			return err
 		}
-		return exec.Command("systemctl", "enable", "lingti-bot").Run()
+		return exec.Command("systemctl", "enable", "coco").Run()
 	default:
 		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
@@ -199,9 +199,9 @@ const launchdPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/lingti-bot.log</string>
+    <string>/tmp/coco.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/lingti-bot.log</string>
+    <string>/tmp/coco.log</string>
 </dict>
 </plist>
 `
@@ -233,8 +233,8 @@ Type=simple
 ExecStart={{.BinaryPath}} serve
 Restart=always
 RestartSec=5
-StandardOutput=append:/tmp/lingti-bot.log
-StandardError=append:/tmp/lingti-bot.log
+StandardOutput=append:/tmp/coco.log
+StandardError=append:/tmp/coco.log
 
 [Install]
 WantedBy=multi-user.target

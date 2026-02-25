@@ -3,7 +3,7 @@ package search
 import (
 	"sync"
 
-	"github.com/pltanton/lingti-bot/internal/config"
+	"github.com/kayz/coco/internal/config"
 )
 
 var (

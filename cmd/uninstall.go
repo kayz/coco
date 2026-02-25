@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/pltanton/lingti-bot/internal/config"
-	"github.com/pltanton/lingti-bot/internal/service"
+	"github.com/kayz/coco/internal/config"
+	"github.com/kayz/coco/internal/service"
 	"github.com/spf13/cobra"
 )
 
@@ -15,8 +15,8 @@ var uninstallForce bool
 
 var topLevelUninstallCmd = &cobra.Command{
 	Use:   "uninstall",
-	Short: "Fully remove lingti-bot from this system",
-	Long: `Fully remove lingti-bot from this system, including:
+	Short: "Fully remove coco from this system",
+	Long: `Fully remove coco from this system, including:
   - System service (launchd/systemd)
   - Installed binary
   - Configuration files
@@ -34,7 +34,7 @@ func init() {
 
 func runUninstall(cmd *cobra.Command, args []string) {
 	if !uninstallForce {
-		fmt.Println("This will fully remove lingti-bot from your system:")
+		fmt.Println("This will fully remove coco from your system:")
 		fmt.Println()
 
 		if service.IsInstalled() {
@@ -44,7 +44,7 @@ func runUninstall(cmd *cobra.Command, args []string) {
 		}
 		fmt.Printf("  - Config dir:      %s\n", config.ConfigDir())
 		fmt.Printf("  - Skills dir:      %s\n", config.SkillsDir())
-		fmt.Printf("  - Log file:        /tmp/lingti-bot.log\n")
+		fmt.Printf("  - Log file:        /tmp/coco.log\n")
 		fmt.Println()
 		fmt.Print("Are you sure? [y/N] ")
 
@@ -86,7 +86,7 @@ func runUninstall(cmd *cobra.Command, args []string) {
 	}
 
 	// 4. Remove log file
-	logFile := "/tmp/lingti-bot.log"
+	logFile := "/tmp/coco.log"
 	if _, err := os.Stat(logFile); err == nil {
 		fmt.Printf("Removing log file: %s\n", logFile)
 		if err := os.Remove(logFile); err != nil {
@@ -103,7 +103,7 @@ func runUninstall(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Println("lingti-bot has been fully uninstalled.")
+	fmt.Println("coco has been fully uninstalled.")
 
 	// Check if we're running from a non-service path (user's own binary)
 	execPath, err := os.Executable()

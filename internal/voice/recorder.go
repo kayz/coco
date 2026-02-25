@@ -93,7 +93,7 @@ func (r *Recorder) Record(ctx context.Context, duration time.Duration) ([]byte, 
 				tmpFile,
 			)
 		} else {
-			return nil, fmt.Errorf("no audio recorder found.\n  Install: brew install sox\n  Or run: lingti-bot setup --all")
+			return nil, fmt.Errorf("no audio recorder found.\n  Install: brew install sox\n  Or run: coco setup --all")
 		}
 
 	case "linux":
@@ -118,7 +118,7 @@ func (r *Recorder) Record(ctx context.Context, duration time.Duration) ([]byte, 
 				"trim", "0", fmt.Sprintf("%d", durationSecs),
 			)
 		} else {
-			return nil, fmt.Errorf("no audio recorder found.\n  Install: sudo apt install alsa-utils sox\n  Or run: lingti-bot setup --all")
+			return nil, fmt.Errorf("no audio recorder found.\n  Install: sudo apt install alsa-utils sox\n  Or run: coco setup --all")
 		}
 
 	case "windows":
@@ -134,7 +134,7 @@ func (r *Recorder) Record(ctx context.Context, duration time.Duration) ([]byte, 
 				tmpFile,
 			)
 		} else {
-			return nil, fmt.Errorf("ffmpeg required for Windows recording.\n  Install: winget install ffmpeg\n  Or run: lingti-bot setup --all")
+			return nil, fmt.Errorf("ffmpeg required for Windows recording.\n  Install: winget install ffmpeg\n  Or run: coco setup --all")
 		}
 
 	default:

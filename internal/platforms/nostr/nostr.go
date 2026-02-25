@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/pltanton/lingti-bot/internal/router"
+	"github.com/kayz/coco/internal/router"
 )
 
 // Platform implements router.Platform for NOSTR protocol
@@ -139,7 +139,7 @@ func (p *Platform) connectRelay(relayURL string) {
 		log.Printf("[NOSTR] Connected to relay: %s", relayURL)
 
 		// Subscribe to DM events (kind 4)
-		sub := []any{"REQ", "lingti-dm", map[string]any{
+		sub := []any{"REQ", "coco-dm", map[string]any{
 			"kinds": []int{4},
 			"since": time.Now().Unix(),
 		}}

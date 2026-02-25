@@ -5,8 +5,8 @@ import (
 	"os"
 	"slices"
 
-	"github.com/pltanton/lingti-bot/internal/config"
-	"github.com/pltanton/lingti-bot/internal/skills"
+	"github.com/kayz/coco/internal/config"
+	"github.com/kayz/coco/internal/skills"
 	"github.com/spf13/cobra"
 )
 
@@ -23,7 +23,7 @@ var skillsCmd = &cobra.Command{
 
 Skills are loaded from multiple directories in precedence order:
   1. Bundled skills  (shipped with binary)
-  2. Managed skills  (~/.lingti/skills/)
+  2. Managed skills  (~/.coco/skills/)
   3. Workspace skills (./skills/)
 
 Each skill is a directory containing a SKILL.md file with YAML frontmatter
@@ -69,7 +69,7 @@ var skillsDisableCmd = &cobra.Command{
 var skillsDownloadCmd = &cobra.Command{
 	Use:   "download",
 	Short: "Download bundled skills from GitHub",
-	Long:  `Download the latest bundled skills from the lingti-bot GitHub repository into ~/.lingti/skills/.`,
+	Long:  `Download the latest bundled skills from the coco GitHub repository into ~/.coco/skills/.`,
 	Run:   runSkillsDownload,
 }
 

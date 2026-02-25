@@ -19,16 +19,16 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/pltanton/lingti-bot/internal/debug"
-	"github.com/pltanton/lingti-bot/internal/platforms/wechat"
-	"github.com/pltanton/lingti-bot/internal/platforms/wecom"
-	"github.com/pltanton/lingti-bot/internal/router"
-	"github.com/pltanton/lingti-bot/internal/voice"
+	"github.com/kayz/coco/internal/debug"
+	"github.com/kayz/coco/internal/platforms/wechat"
+	"github.com/kayz/coco/internal/platforms/wecom"
+	"github.com/kayz/coco/internal/router"
+	"github.com/kayz/coco/internal/voice"
 )
 
 const (
-	DefaultServerURL  = "wss://bot.lingti.com/ws"
-	DefaultWebhookURL = "https://bot.lingti.com/webhook"
+	DefaultServerURL  = "wss://keeper.kayz.com/ws"
+	DefaultWebhookURL = "https://keeper.kayz.com/webhook"
 	ClientVersion     = "1.7.0"
 
 	writeTimeout      = 10 * time.Second
@@ -41,8 +41,9 @@ const (
 type Config struct {
 	UserID     string // From /whoami
 	Platform   string // "feishu", "slack", or "wechat"
-	ServerURL  string // WebSocket URL (default: wss://bot.lingti.com/ws)
-	WebhookURL string // Webhook URL (default: https://bot.lingti.com/webhook)
+	Token      string // Auth token for Keeper connection
+	ServerURL  string // WebSocket URL (default: wss://keeper.kayz.com/ws)
+	WebhookURL string // Webhook URL (default: https://keeper.kayz.com/webhook)
 	AIProvider string // AI provider name (e.g., "claude", "deepseek")
 	AIModel    string // AI model name
 	// WeCom credentials for cloud relay (when platform=wecom)
@@ -94,6 +95,7 @@ type AuthMessage struct {
 	Type          string `json:"type"`
 	UserID        string `json:"user_id"`
 	Platform      string `json:"platform"`
+	Token         string `json:"token,omitempty"`
 	ClientVersion string `json:"client_version"`
 	AIProvider    string `json:"ai_provider,omitempty"`
 	AIModel       string `json:"ai_model,omitempty"`
@@ -529,6 +531,7 @@ func (p *Platform) connect() error {
 		Type:          "auth",
 		UserID:        p.config.UserID,
 		Platform:      p.config.Platform,
+		Token:         p.config.Token,
 		ClientVersion: ClientVersion,
 		AIProvider:    p.config.AIProvider,
 		AIModel:       p.config.AIModel,

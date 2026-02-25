@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pltanton/lingti-bot/internal/config"
+	"github.com/kayz/coco/internal/config"
 )
 
 type Manager struct {

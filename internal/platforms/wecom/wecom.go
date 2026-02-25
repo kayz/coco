@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pltanton/lingti-bot/internal/logger"
-	"github.com/pltanton/lingti-bot/internal/router"
-	"github.com/pltanton/lingti-bot/internal/voice"
+	"github.com/kayz/coco/internal/logger"
+	"github.com/kayz/coco/internal/router"
+	"github.com/kayz/coco/internal/voice"
 )
 
 const (

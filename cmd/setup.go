@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"runtime"
 
-	"github.com/pltanton/lingti-bot/internal/voice"
+	"github.com/kayz/coco/internal/voice"
 	"github.com/spf13/cobra"
 )
 
@@ -26,10 +26,10 @@ This command helps install:
   - Whisper models for transcription
 
 Examples:
-  lingti-bot setup              # Check status and show instructions
-  lingti-bot setup --all        # Install all dependencies
-  lingti-bot setup -c whisper   # Download whisper model only
-  lingti-bot setup -c audio     # Install audio tools only`,
+  coco setup              # Check status and show instructions
+  coco setup --all        # Install all dependencies
+  coco setup -c whisper   # Download whisper model only
+  coco setup -c audio     # Install audio tools only`,
 	Run: runSetup,
 }
 
@@ -163,9 +163,9 @@ func checkStatus() {
 	fmt.Println()
 	fmt.Println("────────────────────────────────────────────────────────────────")
 	if audioOK && whisperOK && modelPath != "" {
-		fmt.Println("✅ All dependencies are installed! Run: lingti-bot voice")
+		fmt.Println("✅ All dependencies are installed! Run: coco voice")
 	} else {
-		fmt.Println("❌ Some dependencies are missing. Run: lingti-bot setup --all")
+		fmt.Println("❌ Some dependencies are missing. Run: coco setup --all")
 	}
 	fmt.Println()
 
@@ -317,7 +317,7 @@ func showInstallInstructions() {
 		fmt.Println("  brew install sox whisper-cpp")
 		fmt.Println()
 		fmt.Println("  # Download whisper model")
-		fmt.Println("  lingti-bot setup -c whisper")
+		fmt.Println("  coco setup -c whisper")
 
 	case "linux":
 		fmt.Println("Linux (Debian/Ubuntu):")
@@ -334,7 +334,7 @@ func showInstallInstructions() {
 		fmt.Println("  pip install openai-whisper")
 		fmt.Println()
 		fmt.Println("  # Download whisper model")
-		fmt.Println("  lingti-bot setup -c whisper")
+		fmt.Println("  coco setup -c whisper")
 
 	case "windows":
 		fmt.Println("Windows:")
@@ -348,7 +348,7 @@ func showInstallInstructions() {
 		fmt.Println("  pip install openai-whisper")
 		fmt.Println()
 		fmt.Println("  # Download whisper model")
-		fmt.Println("  lingti-bot setup -c whisper")
+		fmt.Println("  coco setup -c whisper")
 	}
 }
 

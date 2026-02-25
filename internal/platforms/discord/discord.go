@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/pltanton/lingti-bot/internal/router"
+	"github.com/kayz/coco/internal/router"
 )
 
 // Platform implements router.Platform for Discord

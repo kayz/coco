@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"github.com/pltanton/lingti-bot/internal/router"
+	"github.com/kayz/coco/internal/router"
 )
 
 // VoiceTranscriber transcribes voice messages to text

@@ -18,29 +18,29 @@ Usage modes:
 
      {
        "mcpServers": {
-         "lingti-bot": {
-           "command": "/usr/local/bin/lingti-bot",
+         "coco": {
+           "command": "/usr/local/bin/coco",
            "args": ["serve"]
          }
        }
      }
 
   2. Voice Assistant (talk to AI in your terminal):
-     lingti-bot setup         # Install voice dependencies (first time)
-     lingti-bot talk          # Start voice conversation
+     coco setup         # Install voice dependencies (first time)
+     coco talk          # Start voice conversation
 
   3. Cloud Relay (connect to Lingti cloud for Feishu/Slack bots):
-     lingti-bot relay         # Connect to cloud relay service
+     coco relay         # Connect to cloud relay service
 
   4. Message Router (self-hosted Slack/Feishu/Telegram bots):
      export ANTHROPIC_API_KEY="your-key"
-     lingti-bot router
+     coco router
 
 For more information:
-  lingti-bot help                       # Show all commands
-  lingti-bot <command> --help           # Help for specific command
-  https://cli.lingti.com/bot            # Documentation
-  https://github.com/ruilisi/lingti-bot # Source code
+  coco help                       # Show all commands
+  coco <command> --help           # Help for specific command
+  https://coco.kayz.com/bot            # Documentation
+  https://github.com/ruilisi/coco # Source code
 
 `)
 	},

@@ -7,7 +7,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/pltanton/lingti-bot/internal/router"
+	"github.com/kayz/coco/internal/router"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"

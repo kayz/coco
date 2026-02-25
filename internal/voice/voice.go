@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pltanton/lingti-bot/internal/logger"
+	"github.com/kayz/coco/internal/logger"
 )
 
 // Provider defines a speech provider interface
@@ -58,7 +58,7 @@ type TalkMode struct {
 type Config struct {
 	Provider       string // "system", "openai", "elevenlabs"
 	APIKey         string // API key for cloud providers
-	WakeWord       string // Wake word for activation (e.g., "hey lingti")
+	WakeWord       string // Wake word for activation (e.g., "hey coco")
 	ContinuousMode bool   // Keep listening after response
 	DefaultVoice   string // Default voice for TTS
 	DefaultLang    string // Default language

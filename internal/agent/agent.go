@@ -12,14 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pltanton/lingti-bot/internal/config"
-	cronpkg "github.com/pltanton/lingti-bot/internal/cron"
-	"github.com/pltanton/lingti-bot/internal/logger"
-	"github.com/pltanton/lingti-bot/internal/persist"
-	"github.com/pltanton/lingti-bot/internal/router"
-	"github.com/pltanton/lingti-bot/internal/search"
-	"github.com/pltanton/lingti-bot/internal/security"
-	"github.com/pltanton/lingti-bot/internal/skills"
+	"github.com/kayz/coco/internal/config"
+	cronpkg "github.com/kayz/coco/internal/cron"
+	"github.com/kayz/coco/internal/logger"
+	"github.com/kayz/coco/internal/persist"
+	"github.com/kayz/coco/internal/router"
+	"github.com/kayz/coco/internal/search"
+	"github.com/kayz/coco/internal/security"
+	"github.com/kayz/coco/internal/skills"
 )
 
 var (
@@ -189,7 +189,7 @@ func New(cfg Config) (*Agent, error) {
 		exeDir = "."
 	}
 
-	dbPath := filepath.Join(exeDir, ".lingti.db")
+	dbPath := filepath.Join(exeDir, ".coco.db")
 	persistStore, err := persist.NewStore(dbPath)
 	if err != nil {
 		return nil, err
@@ -2317,7 +2317,7 @@ func getString(m map[string]any, key string) string {
 
 func (a *Agent) executeWebSearchWithManager(ctx context.Context, query string) string {
 	if a.searchManager == nil {
-		return "Error: search manager not initialized. Please configure search engines in ~/.lingti.yaml or use --metaso-api-key or --tavily-api-key"
+		return "Error: search manager not initialized. Please configure search engines in ~/.coco.yaml or use --metaso-api-key or --tavily-api-key"
 	}
 
 	// Check if query starts with "搜索" or "search" to trigger multi-engine search

@@ -7,10 +7,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/pltanton/lingti-bot/internal/agent"
-	"github.com/pltanton/lingti-bot/internal/gateway"
-	"github.com/pltanton/lingti-bot/internal/logger"
-	"github.com/pltanton/lingti-bot/internal/router"
+	"github.com/kayz/coco/internal/agent"
+	"github.com/kayz/coco/internal/gateway"
+	"github.com/kayz/coco/internal/logger"
+	"github.com/kayz/coco/internal/router"
 	"github.com/spf13/cobra"
 )
 

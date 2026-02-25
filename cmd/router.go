@@ -8,32 +8,32 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/pltanton/lingti-bot/internal/agent"
-	"github.com/pltanton/lingti-bot/internal/browser"
-	"github.com/pltanton/lingti-bot/internal/config"
-	cronpkg "github.com/pltanton/lingti-bot/internal/cron"
-	"github.com/pltanton/lingti-bot/internal/logger"
-	"github.com/pltanton/lingti-bot/internal/platforms/dingtalk"
-	"github.com/pltanton/lingti-bot/internal/platforms/discord"
-	"github.com/pltanton/lingti-bot/internal/platforms/feishu"
-	"github.com/pltanton/lingti-bot/internal/platforms/googlechat"
-	"github.com/pltanton/lingti-bot/internal/platforms/imessage"
-	"github.com/pltanton/lingti-bot/internal/platforms/slack"
-	"github.com/pltanton/lingti-bot/internal/platforms/telegram"
-	"github.com/pltanton/lingti-bot/internal/platforms/wecom"
-	"github.com/pltanton/lingti-bot/internal/platforms/line"
-	"github.com/pltanton/lingti-bot/internal/platforms/mattermost"
-	"github.com/pltanton/lingti-bot/internal/platforms/nextcloud"
-	"github.com/pltanton/lingti-bot/internal/platforms/nostr"
-	signalplatform "github.com/pltanton/lingti-bot/internal/platforms/signal"
-	"github.com/pltanton/lingti-bot/internal/platforms/zalo"
-	"github.com/pltanton/lingti-bot/internal/platforms/twitch"
-	"github.com/pltanton/lingti-bot/internal/platforms/matrix"
-	"github.com/pltanton/lingti-bot/internal/platforms/teams"
-	"github.com/pltanton/lingti-bot/internal/platforms/whatsapp"
-	"github.com/pltanton/lingti-bot/internal/router"
-	"github.com/pltanton/lingti-bot/internal/tools"
-	"github.com/pltanton/lingti-bot/internal/voice"
+	"github.com/kayz/coco/internal/agent"
+	"github.com/kayz/coco/internal/browser"
+	"github.com/kayz/coco/internal/config"
+	cronpkg "github.com/kayz/coco/internal/cron"
+	"github.com/kayz/coco/internal/logger"
+	"github.com/kayz/coco/internal/platforms/dingtalk"
+	"github.com/kayz/coco/internal/platforms/discord"
+	"github.com/kayz/coco/internal/platforms/feishu"
+	"github.com/kayz/coco/internal/platforms/googlechat"
+	"github.com/kayz/coco/internal/platforms/imessage"
+	"github.com/kayz/coco/internal/platforms/slack"
+	"github.com/kayz/coco/internal/platforms/telegram"
+	"github.com/kayz/coco/internal/platforms/wecom"
+	"github.com/kayz/coco/internal/platforms/line"
+	"github.com/kayz/coco/internal/platforms/mattermost"
+	"github.com/kayz/coco/internal/platforms/nextcloud"
+	"github.com/kayz/coco/internal/platforms/nostr"
+	signalplatform "github.com/kayz/coco/internal/platforms/signal"
+	"github.com/kayz/coco/internal/platforms/zalo"
+	"github.com/kayz/coco/internal/platforms/twitch"
+	"github.com/kayz/coco/internal/platforms/matrix"
+	"github.com/kayz/coco/internal/platforms/teams"
+	"github.com/kayz/coco/internal/platforms/whatsapp"
+	"github.com/kayz/coco/internal/router"
+	"github.com/kayz/coco/internal/tools"
+	"github.com/kayz/coco/internal/voice"
 	"github.com/spf13/cobra"
 )
 
@@ -176,7 +176,7 @@ func init() {
 	routerCmd.Flags().StringVar(&aiInstructions, "instructions", "", "Path to custom instructions file appended to system prompt")
 	routerCmd.Flags().StringVar(&voiceSTTProvider, "voice-stt-provider", "", "Voice STT provider: system, openai (or VOICE_STT_PROVIDER env, default: system)")
 	routerCmd.Flags().StringVar(&voiceSTTAPIKey, "voice-stt-api-key", "", "Voice STT API key (or VOICE_STT_API_KEY env)")
-	routerCmd.Flags().StringVar(&browserDebugDir, "debug-dir", "", "Directory for debug screenshots (or BROWSER_DEBUG_DIR env, default: /tmp/lingti-bot on Unix)")
+	routerCmd.Flags().StringVar(&browserDebugDir, "debug-dir", "", "Directory for debug screenshots (or BROWSER_DEBUG_DIR env, default: /tmp/coco on Unix)")
 }
 
 func runRouter(cmd *cobra.Command, args []string) {
@@ -569,7 +569,7 @@ func runRouter(cmd *cobra.Command, args []string) {
 
 	// Configure browser debug mode if enabled
 	if debugEnabled {
-		// Import is needed at the top: "github.com/pltanton/lingti-bot/internal/browser"
+		// Import is needed at the top: "github.com/kayz/coco/internal/browser"
 		if err := setupBrowserDebug(browserDebugDir); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Failed to setup browser debug: %v\n", err)
 		} else {
@@ -585,7 +585,7 @@ func runRouter(cmd *cobra.Command, args []string) {
 	if exeDir == "" {
 		exeDir = os.TempDir()
 	}
-	cronPath := filepath.Join(exeDir, ".lingti.db")
+	cronPath := filepath.Join(exeDir, ".coco.db")
 	cronStore, err := cronpkg.NewStore(cronPath)
 	if err != nil {
 		logger.Error("Failed to open cron store: %v", err)
@@ -935,7 +935,7 @@ func runRouter(cmd *cobra.Command, args []string) {
 func setupBrowserDebug(debugDir string) error {
 	// Use default debug directory if not specified
 	if debugDir == "" {
-		debugDir = filepath.Join(os.TempDir(), "lingti-bot")
+		debugDir = filepath.Join(os.TempDir(), "coco")
 	}
 
 	// Create debug directory

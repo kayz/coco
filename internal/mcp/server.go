@@ -9,15 +9,15 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	cronpkg "github.com/pltanton/lingti-bot/internal/cron"
-	"github.com/pltanton/lingti-bot/internal/security"
-	"github.com/pltanton/lingti-bot/internal/tools"
+	cronpkg "github.com/kayz/coco/internal/cron"
+	"github.com/kayz/coco/internal/security"
+	"github.com/kayz/coco/internal/tools"
 )
 
-const ServerName = "lingti-bot"
+const ServerName = "coco"
 
 // ServerVersion is set via ldflags at build time
-var ServerVersion = "1.7.0"
+var ServerVersion = "1.8.0"
 
 // ToolHandler is a function that handles tool calls
 type ToolHandler func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error)
@@ -70,11 +70,11 @@ func NewServer(opts ...SecurityOptions) *Server {
 	if exeDir == "" {
 		exeDir = os.TempDir()
 	}
-	cronPath := filepath.Join(exeDir, ".lingti.db")
+	cronPath := filepath.Join(exeDir, ".coco.db")
 	cronStore, err := cronpkg.NewStore(cronPath)
 	if err != nil {
 		log.Printf("[CRON] Warning: Failed to open cron store: %v", err)
-		cronStore, _ = cronpkg.NewStore(filepath.Join(os.TempDir(), "lingti.db"))
+		cronStore, _ = cronpkg.NewStore(filepath.Join(os.TempDir(), "coco.db"))
 	}
 	s.cronScheduler = cronpkg.NewScheduler(cronStore, s, nil, s)
 

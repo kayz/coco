@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	cronpkg "github.com/pltanton/lingti-bot/internal/cron"
+	cronpkg "github.com/kayz/coco/internal/cron"
 )
 
 // executeCronCreate creates a new scheduled task

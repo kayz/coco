@@ -43,6 +43,18 @@ type Config struct {
 	Skills    SkillsConfig    `yaml:"skills,omitempty"`
 	Browser   BrowserConfig   `yaml:"browser,omitempty"`
 	Search    SearchConfig    `yaml:"search,omitempty"`
+	Keeper    KeeperConfig    `yaml:"keeper,omitempty"`
+}
+
+// KeeperConfig holds configuration for Keeper mode (public server).
+type KeeperConfig struct {
+	Port         int    `yaml:"port,omitempty"`           // HTTP listen port, default 8080
+	Token        string `yaml:"token,omitempty"`          // Auth token for coco connections
+	WeComCorpID  string `yaml:"wecom_corp_id,omitempty"`
+	WeComAgentID string `yaml:"wecom_agent_id,omitempty"`
+	WeComSecret  string `yaml:"wecom_secret,omitempty"`
+	WeComToken   string `yaml:"wecom_token,omitempty"`    // WeCom callback verification token
+	WeComAESKey  string `yaml:"wecom_aes_key,omitempty"`  // WeCom callback EncodingAESKey
 }
 
 // SearchEngineConfig 单个搜索引擎配置
@@ -75,6 +87,7 @@ type BrowserConfig struct {
 type RelayConfig struct {
 	UserID        string `yaml:"user_id,omitempty"`
 	Platform      string `yaml:"platform,omitempty"` // "feishu", "slack", "wechat", "wecom"
+	Token         string `yaml:"token,omitempty"`    // Auth token for Keeper connection
 	ServerURL     string `yaml:"server_url,omitempty"` // Custom relay server WebSocket URL
 	WebhookURL    string `yaml:"webhook_url,omitempty"` // Custom relay server webhook URL
 	UseMediaProxy bool   `yaml:"use_media_proxy,omitempty"` // Proxy media download/upload through relay server
@@ -88,7 +101,7 @@ type SkillsConfig struct {
 // SkillsDir returns the managed skills directory path
 func SkillsDir() string {
 	exeDir := getExecutableDir()
-	return filepath.Join(exeDir, ".lingti", "skills")
+	return filepath.Join(exeDir, ".coco", "skills")
 }
 
 type AIConfig struct {
@@ -266,7 +279,7 @@ func DefaultConfig() *Config {
 		},
 		Logging: LoggingConfig{
 			Level: "info",
-			File:  "/tmp/lingti-bot.log",
+			File:  "/tmp/coco.log",
 		},
 		AI: AIConfig{},
 		Embedding: EmbeddingConfig{
@@ -294,8 +307,8 @@ func DefaultConfig() *Config {
 			},
 		},
 		Relay: RelayConfig{
-			ServerURL:     "wss://bot.lingti.com/ws",
-			WebhookURL:    "https://bot.lingti.com/webhook",
+			ServerURL:     "wss://keeper.kayz.com/ws",
+			WebhookURL:    "https://keeper.kayz.com/webhook",
 			UseMediaProxy: true,
 		},
 	}
@@ -303,12 +316,12 @@ func DefaultConfig() *Config {
 
 func ConfigDir() string {
 	exeDir := getExecutableDir()
-	return filepath.Join(exeDir, ".lingti")
+	return filepath.Join(exeDir, ".coco")
 }
 
 func ConfigPath() string {
 	exeDir := getExecutableDir()
-	return filepath.Join(exeDir, ".lingti.yaml")
+	return filepath.Join(exeDir, ".coco.yaml")
 }
 
 func Load() (*Config, error) {

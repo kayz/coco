@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/pltanton/lingti-bot/internal/config"
-	"github.com/pltanton/lingti-bot/internal/logger"
-	"github.com/pltanton/lingti-bot/internal/mcp"
+	"github.com/kayz/coco/internal/config"
+	"github.com/kayz/coco/internal/logger"
+	"github.com/kayz/coco/internal/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -21,17 +21,23 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "lingti-bot",
-	Short: "MCP server for system resources",
-	Long: `lingti-bot is an MCP (Model Context Protocol) server that exposes
-computer system resources to AI assistants.
+	Use:   "coco",
+	Short: "coco — personal AI assistant (cowork & copilot)",
+	Long: `coco is a personal AI assistant system with dual-agent architecture.
+
+Modes:
+  coco           Run as local AI assistant (default)
+  coco keeper    Run as public-facing relay server (Keeper mode)
+  coco router    Run as message router with platform integrations
 
 It provides tools for:
   - File operations (read, write, list, search)
   - Shell command execution
   - System information (CPU, memory, disk)
   - Process management
-  - Network information`,
+  - Network information
+  - Browser automation
+  - Multi-platform messaging (WeCom, Feishu, Telegram, Slack, Discord...)`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		// Parse and set log level
 		level, err := logger.ParseLevel(logLevel)

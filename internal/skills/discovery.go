@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/pltanton/lingti-bot/internal/tools"
+	"github.com/kayz/coco/internal/tools"
 	"gopkg.in/yaml.v3"
 )
 
@@ -204,7 +204,7 @@ func DiscoverSkills(disabledList []string, extraDirs []string) []SkillEntry {
 		loadSkillsFromDir(dir, SourceExtra, disabled, skills)
 	}
 
-	// 3. Managed skills (~/.lingti/skills/)
+	// 3. Managed skills (~/.coco/skills/)
 	managedDir := managedSkillsDir()
 	loadSkillsFromDir(managedDir, SourceManaged, disabled, skills)
 
@@ -312,7 +312,7 @@ func looksLikeSkillsDir(dir string) bool {
 // managedSkillsDir returns the user-level skills directory
 func managedSkillsDir() string {
 	exeDir := tools.GetExecutableDir()
-	return filepath.Join(exeDir, ".lingti", "skills")
+	return filepath.Join(exeDir, ".coco", "skills")
 }
 
 // HasBinary checks if a binary exists in PATH

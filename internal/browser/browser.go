@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pltanton/lingti-bot/internal/config"
+	"github.com/kayz/coco/internal/config"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
@@ -67,7 +67,7 @@ func Instance() *Browser {
 		exeDir := getExecutableDir()
 		instance = &Browser{
 			headless: false,
-			dataDir:  filepath.Join(exeDir, ".lingti-bot", "browser"),
+			dataDir:  filepath.Join(exeDir, ".coco", "browser"),
 			refs:     make(map[int]RefEntry),
 		}
 	})

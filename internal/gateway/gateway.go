@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/pltanton/lingti-bot/internal/logger"
+	"github.com/kayz/coco/internal/logger"
 )
 
 // MessageType defines the type of gateway message

@@ -98,13 +98,13 @@ func (s *Store) init() error {
 
 // migrateFromJSON imports jobs from the legacy crons.json if it exists
 func (s *Store) migrateFromJSON() {
-	// The old JSON path is .lingti/crons.json in executable directory
+	// The old JSON path is .coco/crons.json in executable directory
 	// Derive it from executable directory
 	exeDir := getExecutableDir()
 	if exeDir == "" {
 		return
 	}
-	jsonPath := filepath.Join(exeDir, ".lingti", "crons.json")
+	jsonPath := filepath.Join(exeDir, ".coco", "crons.json")
 
 	data, err := os.ReadFile(jsonPath)
 	if err != nil {

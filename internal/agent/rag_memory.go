@@ -9,12 +9,12 @@ import (
 	"time"
 
 	"github.com/philippgille/chromem-go"
-	"github.com/pltanton/lingti-bot/internal/config"
-	"github.com/pltanton/lingti-bot/internal/logger"
+	"github.com/kayz/coco/internal/config"
+	"github.com/kayz/coco/internal/logger"
 )
 
 const (
-	ragCollectionName = "lingti-memory"
+	ragCollectionName = "coco-memory"
 	maxChunkSize      = 1000
 	maxChunks         = 10000
 )
@@ -69,7 +69,7 @@ func NewRAGMemory(cfg config.EmbeddingConfig) (*RAGMemory, error) {
 		return nil, fmt.Errorf("failed to create embedding provider: %w", err)
 	}
 
-	dataDir := filepath.Join(getExecutableDir(), ".lingti", "rag")
+	dataDir := filepath.Join(getExecutableDir(), ".coco", "rag")
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}

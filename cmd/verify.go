@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pltanton/lingti-bot/internal/platforms/relay"
+	"github.com/kayz/coco/internal/platforms/relay"
 	"github.com/spf13/cobra"
 )
 
@@ -35,12 +35,12 @@ processing in a single command. There's no need to run verify separately.
 
 Simplified workflow with 'relay':
   1. Run 'relay' with your credentials and AI provider
-  2. Configure callback URL in the platform (e.g., https://bot.lingti.com/wecom)
+  2. Configure callback URL in the platform (e.g., https://keeper.kayz.com/wecom)
   3. Save config - verification succeeds automatically
   4. Messages are processed immediately with your AI provider
 
 Example (recommended):
-  lingti-bot relay --platform wecom \
+  coco relay --platform wecom \
     --wecom-corp-id YOUR_CORP_ID \
     --wecom-agent-id YOUR_AGENT_ID \
     --wecom-secret YOUR_SECRET \
@@ -58,7 +58,7 @@ func init() {
 	rootCmd.AddCommand(verifyCmd)
 
 	verifyCmd.Flags().StringVar(&verifyPlatform, "platform", "", "Platform: wecom (required)")
-	verifyCmd.Flags().StringVar(&verifyServerURL, "server", "", "WebSocket URL (default: wss://bot.lingti.com/ws)")
+	verifyCmd.Flags().StringVar(&verifyServerURL, "server", "", "WebSocket URL (default: wss://keeper.kayz.com/ws)")
 	verifyCmd.Flags().IntVar(&verifyTimeout, "timeout", 300, "Timeout in seconds (default: 300)")
 
 	// WeCom credentials
@@ -179,7 +179,7 @@ func runVerify(cmd *cobra.Command, args []string) {
 	log.Println("")
 	switch verifyPlatform {
 	case "wecom":
-		log.Println("    https://bot.lingti.com/wecom")
+		log.Println("    https://keeper.kayz.com/wecom")
 	}
 	log.Println("")
 	log.Println("When you save the configuration, the platform will send a")
@@ -206,7 +206,7 @@ func runVerify(cmd *cobra.Command, args []string) {
 	log.Println("")
 	log.Println("Use 'relay' instead - it handles both verification AND messages:")
 	log.Println("")
-	log.Printf("  lingti-bot relay --platform %s \\\n", verifyPlatform)
+	log.Printf("  coco relay --platform %s \\\n", verifyPlatform)
 	log.Printf("    --wecom-corp-id %s \\\n", verifyWeComCorpID)
 	log.Println("    --wecom-agent-id ... --wecom-secret ... \\")
 	log.Println("    --wecom-token ... --wecom-aes-key ... \\")

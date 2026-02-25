@@ -1,4 +1,4 @@
-module github.com/pltanton/lingti-bot
+module github.com/kayz/coco
 
 go 1.24.0
 

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pltanton/lingti-bot/internal/persist"
+	"github.com/kayz/coco/internal/persist"
 )
 
 // ConversationMemory stores conversation history per user/channel

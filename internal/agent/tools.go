@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/pltanton/lingti-bot/internal/logger"
-	"github.com/pltanton/lingti-bot/internal/router"
-	"github.com/pltanton/lingti-bot/internal/tools"
+	"github.com/kayz/coco/internal/logger"
+	"github.com/kayz/coco/internal/router"
+	"github.com/kayz/coco/internal/tools"
 )
 
 // executeSystemInfo runs the system_info tool

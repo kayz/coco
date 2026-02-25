@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/pltanton/lingti-bot/internal/config"
-	"github.com/pltanton/lingti-bot/internal/search"
+	"github.com/kayz/coco/internal/config"
+	"github.com/kayz/coco/internal/search"
 )
 
 var (
@@ -47,12 +47,12 @@ func WebSearch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResul
 	}
 
 	if err := initSearch(); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("search engines not configured: %v\n\nPlease run 'lingti-bot.exe onboard' to configure your search engines.", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("search engines not configured: %v\n\nPlease run 'coco.exe onboard' to configure your search engines.", err)), nil
 	}
 
 	manager := search.GetGlobalManager()
 	if manager == nil {
-		return mcp.NewToolResultError("search manager not available. Please configure search engines via 'lingti-bot.exe onboard'."), nil
+		return mcp.NewToolResultError("search manager not available. Please configure search engines via 'coco.exe onboard'."), nil
 	}
 
 	var resultText string

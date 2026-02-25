@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/pltanton/lingti-bot/internal/tools"
+	"github.com/kayz/coco/internal/tools"
 )
 
 // Skill represents a skill/plugin that can be executed
@@ -99,7 +99,7 @@ type Registry struct {
 func NewRegistry(skillDir string) *Registry {
 	if skillDir == "" {
 		exeDir := tools.GetExecutableDir()
-		skillDir = filepath.Join(exeDir, ".lingti", "skills")
+		skillDir = filepath.Join(exeDir, ".coco", "skills")
 	}
 
 	return &Registry{
