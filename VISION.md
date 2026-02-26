@@ -3,7 +3,7 @@
 > 本文档记录 coco 项目的长期愿景、架构决策和实现路线图。
 > 所有功能的实现状态、每阶段目标和架构设计均在此维护。
 >
-> 最后更新：2026-02-25
+> 最后更新：2026-02-26
 
 ---
 
@@ -280,18 +280,25 @@ coco skill install <name>
 | Skills 系统 | ✅ | JSON 定义，8 个内置 skills |
 | `--onboard` 向导 | ✅ | 基础框架（1240行） |
 | 单一二进制 | ✅ | Go 编译 |
+| Keeper 模式 | ✅ | v1.9.0 — 自建公网服务端，企业微信 Webhook + WebSocket 转发 |
+| coco 连接自建 Keeper | ✅ | v1.9.0 — relay 模式指向自建 Keeper，跳过本地 WeCom 凭证 |
+| 离线兜底 | ✅ | v1.9.0 — coco 离线时 Keeper 返回固定文本 |
+| PromptBuild 模块 | ✅ | v1.9.0 — 无状态 Prompt 组装（SQLite + Markdown 模板） |
+
+### Phase 0：双 Agent 架构骨架（✅ 已完成 — 2026-02-26，v1.9.0）
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| `coco keeper` 模式入口 | ✅ 完成 | `cmd/keeper.go`，540 行 |
+| Keeper WebSocket 服务端 | ✅ 完成 | 接受 coco 连接，token 认证，ping/pong 保活 |
+| 企业微信 Webhook 自托管 | ✅ 完成 | URL 验证 + 消息解密转发 |
+| coco 连接自建 Keeper | ✅ 完成 | relay 模式，自建 Keeper 跳过 WeCom 凭证校验 |
+| 消息透传链路 | ✅ 完成 | 企业微信 → Keeper → coco → AI → 回复，全链路验证通过 |
+| 离线兜底 | ✅ 完成 | coco 离线时返回固定文本 |
+| 断线自动重连 | ✅ 完成 | coco 重启 / Keeper 重启均自动恢复 |
+| 部署文档 | ✅ 完成 | `docs/keeper-setup.md` + `docs/phase0-verification.md` |
 
 ### 待实现（🚧 规划中）
-
-#### Phase 0：双 Agent 架构骨架
-
-| 功能 | 优先级 | 说明 |
-|------|--------|------|
-| `--keeper` 模式入口 | 🔴 高 | cmd/ 入口拆分 |
-| Keeper WebSocket 服务端 | 🔴 高 | 接受 coco 连接，替代 keeper.kayz.com |
-| 企业微信 Webhook 自托管 | 🔴 高 | Keeper 自建，不依赖第三方 |
-| coco 连接 Keeper | 🔴 高 | 替代连接 keeper.kayz.com |
-| 消息透传链路 | 🔴 高 | 企业微信 → Keeper → coco → AI → 回复 |
 
 #### Phase 1：多模型路由
 

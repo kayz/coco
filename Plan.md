@@ -4,7 +4,9 @@
 > 目标：在现有 coco 代码基础上，实现 Keeper 模式，完成企业微信消息的端到端回复。
 >
 > 参考：`VISION.md` Phase 0 章节
-> 更新时间：2026-02-25
+> 更新时间：2026-02-26
+>
+> **状态：✅ 已完成** — 2026-02-26 全部验收通过，版本 v1.9.0
 
 ---
 
@@ -384,10 +386,42 @@ Phase 0 完成，当且仅当：
 - [x] 用户在企业微信发消息，coco AI 回复正常到达
 - [x] 关闭 coco，企业微信发消息，Keeper 返回离线提示
 - [x] 重启 coco，自动重连，恢复正常回复
+- [x] Keeper 重启后，coco 自动重连，恢复正常回复
 - [x] `docs/keeper-setup.md` 文档完成，能指导新用户从零配置
 - [x] `cmd/relay-server.go` 已删除
 
 ---
 
+## 十一、实际完成记录
+
+**完成日期**：2026-02-26
+**版本**：v1.9.0
+**部署环境**：Keeper 运行于 www.greatquant.com（47.100.66.40），Nginx + Let's Encrypt 反代
+
+### 实际涉及文件
+
+| 文件 | 变更 | 说明 |
+|------|------|------|
+| `cmd/keeper.go` | 新建 | Keeper 服务端（WebSocket + WeCom Webhook + Health） |
+| `cmd/relay.go` | 修改 | 连接自建 Keeper 时跳过 WeCom 凭证校验 |
+| `internal/config/config.go` | 修改 | 新增 KeeperConfig、PromptBuildConfig |
+| `internal/mcp/server.go` | 修改 | 版本号 → 1.9.0 |
+| `internal/platforms/relay/relay.go` | 修改 | 客户端版本号 → 1.9.0 |
+| `internal/agent/agent.go` | 修改 | 移除首次连接日报推送，灵缇 → coco |
+| `internal/promptbuild/` | 新建 | Prompt 组装模块（无状态，只读 SQLite + Markdown） |
+| `cmd/promptbuild.go` | 新建 | promptbuild 子命令入口 |
+| `docs/keeper-setup.md` | 新建 | Keeper 部署指南 |
+| `docs/phase0-verification.md` | 新建 | Phase 0 验证手册 |
+
+### 部署过程中解决的问题
+
+1. **YAML 缩进错误**：`keeper:` 字段多了 2 个空格缩进，导致解析失败
+2. **HTTPS 反代缺失**：Nginx 新装无站点配置，需手动创建 `/etc/nginx/sites-available/coco` 并配置 SSL 反代
+3. **企业微信 IP 白名单**：服务器 IP 未加入企业可信 IP，导致 API 60020 错误
+4. **WeCom 凭证校验过严**：`cmd/relay.go` 连接自建 Keeper 时不应要求本地提供 WeCom 凭证
+
+---
+
 *计划制定：2026-02-25*
-*预计涉及文件：`cmd/keeper.go`（新建）、`cmd/relay-server.go`（删除）、`internal/config/config.go`、`docs/keeper-setup.md`*
+*完成确认：2026-02-26*
+*涉及文件：`cmd/keeper.go`（新建）、`cmd/relay-server.go`（删除）、`internal/config/config.go`、`docs/keeper-setup.md` 等*
