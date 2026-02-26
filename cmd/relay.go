@@ -303,7 +303,10 @@ func runRelay(cmd *cobra.Command, args []string) {
 	}
 
 	// Validate WeCom credentials when platform is wecom
-	if relayPlatform == "wecom" {
+	// Skip validation when connecting to a self-hosted Keeper (non-default server_url),
+	// because the Keeper holds the WeCom credentials, not the coco client.
+	isDefaultRelay := relayServerURL == "" || relayServerURL == "wss://keeper.kayz.com/ws"
+	if relayPlatform == "wecom" && isDefaultRelay {
 		missing := []string{}
 		if relayWeComCorpID == "" {
 			missing = append(missing, "--wecom-corp-id")

@@ -672,7 +672,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 	
 	// Fallback to default if files not found
 	if aboutMe == "" {
-		aboutMe = "You are 灵缇 (Lingti), a helpful AI assistant running on the user's computer."
+		aboutMe = "You are coco, a helpful AI assistant running on the user's computer."
 	}
 	
 	// Retrieve relevant memories from RAG if enabled
@@ -707,7 +707,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 		systemPrompt = fmt.Sprintf(aboutMe+"%s\n\n"+systemContent, 
 			autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg.Username, time.Now().Format("2006-01-02"))
 	} else {
-		systemPrompt = fmt.Sprintf(`You are 灵缇 (Lingti), a helpful AI assistant running on the user's computer.%s
+		systemPrompt = fmt.Sprintf(`You are coco, a helpful AI assistant running on the user's computer.%s
 
 ## System Environment
 - Operating System: %s
@@ -946,12 +946,8 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 		}
 	}
 
-	// Check if this is the first message and add report notification
-	if a.isFirstMessage(convKey) {
-		if notification := a.getReportNotification(); notification != "" {
-			resp.Content = notification + "\n\n" + resp.Content
-		}
-	}
+	// Track first message (reserved for future use)
+	a.isFirstMessage(convKey)
 
 	// Log response at verbose level
 	logger.Debug("[Agent] Response: %s", resp.Content)

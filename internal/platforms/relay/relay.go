@@ -29,7 +29,7 @@ import (
 const (
 	DefaultServerURL  = "wss://keeper.kayz.com/ws"
 	DefaultWebhookURL = "https://keeper.kayz.com/webhook"
-	ClientVersion     = "1.7.0"
+	ClientVersion     = "1.9.0"
 
 	writeTimeout      = 10 * time.Second
 	readTimeout       = 60 * time.Second
