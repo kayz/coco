@@ -20,17 +20,14 @@ import (
 )
 
 var (
-	relayUserID         string
-	relayPlatform       string
-	relayToken          string
-	relayServerURL      string
-	relayWebhookURL     string
-	relayUseMediaProxy  bool
-	relayAIProvider     string
-	relayAPIKey         string
-	relayBaseURL        string
-	relayModel          string
-	relayInstructions   string
+	relayUserID        string
+	relayPlatform      string
+	relayToken         string
+	relayServiceAction string
+	relayServerURL     string
+	relayWebhookURL    string
+	relayUseMediaProxy bool
+	relayInstructions  string
 	// WeCom credentials for cloud relay
 	relayWeComCorpID  string
 	relayWeComAgentID string
@@ -70,9 +67,7 @@ WeCom Cloud Relay:
     --wecom-agent-id YOUR_AGENT_ID \
     --wecom-secret YOUR_SECRET \
     --wecom-token YOUR_TOKEN \
-    --wecom-aes-key YOUR_AES_KEY \
-    --provider deepseek \
-    --api-key YOUR_API_KEY
+    --wecom-aes-key YOUR_AES_KEY
 
   1. Run this command first
   2. Configure callback URL in WeCom: https://keeper.kayz.com/wecom
@@ -82,7 +77,6 @@ WeCom Cloud Relay:
 Required:
   --user-id     Your user ID from /whoami (not needed for WeCom)
   --platform    Platform type: feishu, slack, wechat, or wecom
-  --api-key     AI API key (or AI_API_KEY env)
 
 WeCom Required (when platform=wecom):
   --wecom-corp-id    WeCom Corp ID (or WECOM_CORP_ID env)
@@ -95,11 +89,7 @@ Environment variables:
   RELAY_USER_ID        Alternative to --user-id
   RELAY_PLATFORM       Alternative to --platform
   RELAY_SERVER_URL     Custom WebSocket server URL
-  RELAY_WEBHOOK_URL    Custom webhook URL
-  AI_PROVIDER          AI provider: claude, deepseek, kimi, qwen (default: claude)
-  AI_API_KEY           AI API key
-  AI_BASE_URL          Custom API base URL
-  AI_MODEL             Model name`,
+  RELAY_WEBHOOK_URL    Custom webhook URL`,
 	Run: runRelay,
 }
 
@@ -109,13 +99,10 @@ func init() {
 	relayCmd.Flags().StringVar(&relayUserID, "user-id", "", "User ID from /whoami (required, or RELAY_USER_ID env)")
 	relayCmd.Flags().StringVar(&relayPlatform, "platform", "", "Platform: feishu, slack, wechat, or wecom (required, or RELAY_PLATFORM env)")
 	relayCmd.Flags().StringVar(&relayToken, "token", "", "Auth token for Keeper connection (or RELAY_TOKEN env)")
+	relayCmd.Flags().StringVar(&relayServiceAction, "service", "", serviceActionHelp)
 	relayCmd.Flags().StringVar(&relayServerURL, "server", "", "WebSocket URL (default: wss://keeper.kayz.com/ws, or RELAY_SERVER_URL env)")
 	relayCmd.Flags().StringVar(&relayWebhookURL, "webhook", "", "Webhook URL (default: https://keeper.kayz.com/webhook, or RELAY_WEBHOOK_URL env)")
 	relayCmd.Flags().BoolVar(&relayUseMediaProxy, "use-media-proxy", false, "Proxy media download/upload through relay server")
-	relayCmd.Flags().StringVar(&relayAIProvider, "provider", "", "AI provider: claude, deepseek, kimi, qwen (or AI_PROVIDER env)")
-	relayCmd.Flags().StringVar(&relayAPIKey, "api-key", "", "AI API key (or AI_API_KEY env)")
-	relayCmd.Flags().StringVar(&relayBaseURL, "base-url", "", "Custom API base URL (or AI_BASE_URL env)")
-	relayCmd.Flags().StringVar(&relayModel, "model", "", "Model name (or AI_MODEL env)")
 	relayCmd.Flags().StringVar(&relayInstructions, "instructions", "", "Path to custom instructions file appended to system prompt")
 
 	// WeCom credentials for cloud relay
@@ -134,6 +121,10 @@ func init() {
 }
 
 func runRelay(cmd *cobra.Command, args []string) {
+	if runModeServiceAction("relay", relayServiceAction) {
+		return
+	}
+
 	// Get values from flags or environment
 	if relayUserID == "" {
 		relayUserID = os.Getenv("RELAY_USER_ID")
@@ -164,31 +155,6 @@ func runRelay(cmd *cobra.Command, args []string) {
 	if relayVoiceSTTAPIKey == "" {
 		relayVoiceSTTAPIKey = os.Getenv("VOICE_STT_API_KEY")
 	}
-	if relayAIProvider == "" {
-		relayAIProvider = os.Getenv("AI_PROVIDER")
-	}
-	if relayAPIKey == "" {
-		relayAPIKey = os.Getenv("AI_API_KEY")
-		// Fallback: ANTHROPIC_OAUTH_TOKEN (setup token) > ANTHROPIC_API_KEY
-		if relayAPIKey == "" {
-			relayAPIKey = os.Getenv("ANTHROPIC_OAUTH_TOKEN")
-		}
-		if relayAPIKey == "" {
-			relayAPIKey = os.Getenv("ANTHROPIC_API_KEY")
-		}
-	}
-	if relayBaseURL == "" {
-		relayBaseURL = os.Getenv("AI_BASE_URL")
-		if relayBaseURL == "" {
-			relayBaseURL = os.Getenv("ANTHROPIC_BASE_URL")
-		}
-	}
-	if relayModel == "" {
-		relayModel = os.Getenv("AI_MODEL")
-		if relayModel == "" {
-			relayModel = os.Getenv("ANTHROPIC_MODEL")
-		}
-	}
 
 	// Get WeCom credentials from flags or environment
 	if relayWeComCorpID == "" {
@@ -217,18 +183,6 @@ func runRelay(cmd *cobra.Command, args []string) {
 
 	// Fallback to saved config file
 	if savedCfg, err := config.Load(); err == nil {
-		if relayAIProvider == "" {
-			relayAIProvider = savedCfg.AI.Provider
-		}
-		if relayAPIKey == "" {
-			relayAPIKey = savedCfg.AI.APIKey
-		}
-		if relayBaseURL == "" {
-			relayBaseURL = savedCfg.AI.BaseURL
-		}
-		if relayModel == "" {
-			relayModel = savedCfg.AI.Model
-		}
 		// Read relay-specific config (platform, user-id, server, webhook, media-proxy) from saved config
 		if relayPlatform == "" && savedCfg.Relay.Platform != "" {
 			relayPlatform = savedCfg.Relay.Platform
@@ -286,10 +240,6 @@ func runRelay(cmd *cobra.Command, args []string) {
 		fmt.Fprintln(os.Stderr, "Error: --platform must be 'feishu', 'slack', 'wechat', or 'wecom'")
 		os.Exit(1)
 	}
-	if relayAPIKey == "" {
-		fmt.Fprintln(os.Stderr, "Error: AI API key is required (--api-key or AI_API_KEY env)")
-		os.Exit(1)
-	}
 
 	// For WeCom, user-id is optional - auto-generate from corp_id
 	// For other platforms, user-id is required
@@ -344,10 +294,6 @@ func runRelay(cmd *cobra.Command, args []string) {
 
 	// Create the AI agent
 	aiAgent, err := agent.New(agent.Config{
-		Provider:           relayAIProvider,
-		APIKey:             relayAPIKey,
-		BaseURL:            relayBaseURL,
-		Model:              relayModel,
 		CustomInstructions: customInstructions,
 		AllowedPaths:       loadAllowedPaths(),
 		DisableFileTools:   loadDisableFileTools(),
@@ -355,23 +301,6 @@ func runRelay(cmd *cobra.Command, args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating agent: %v\n", err)
 		os.Exit(1)
-	}
-
-	// Resolve provider and model names
-	providerName := relayAIProvider
-	if providerName == "" {
-		providerName = "claude"
-	}
-	modelName := relayModel
-	if modelName == "" {
-		switch providerName {
-		case "deepseek":
-			modelName = "deepseek-chat"
-		case "kimi", "moonshot":
-			modelName = "moonshot-v1-8k"
-		default:
-			modelName = "claude-sonnet-4-20250514"
-		}
 	}
 
 	// Create the router with the agent as message handler
@@ -411,22 +340,22 @@ func runRelay(cmd *cobra.Command, args []string) {
 
 	// Create and register relay platform
 	relayPlatformInstance, err := relay.New(relay.Config{
-		UserID:           relayUserID,
-		Platform:         relayPlatform,
-		Token:            relayToken,
-		ServerURL:        relayServerURL,
-		WebhookURL:       relayWebhookURL,
-		UseMediaProxy:    relayUseMediaProxy,
-		AIProvider:       providerName,
-		AIModel:          modelName,
-		WeComCorpID:      relayWeComCorpID,
-		WeComAgentID:     relayWeComAgentID,
-		WeComSecret:      relayWeComSecret,
-		WeComToken:       relayWeComToken,
-		WeComAESKey:      relayWeComAESKey,
-		WeChatAppID:      relayWeChatAppID,
-		WeChatAppSecret:  relayWeChatAppSecret,
-		Transcriber:      transcriber,
+		UserID:          relayUserID,
+		Platform:        relayPlatform,
+		Token:           relayToken,
+		ServerURL:       relayServerURL,
+		WebhookURL:      relayWebhookURL,
+		UseMediaProxy:   relayUseMediaProxy,
+		AIProvider:      "",
+		AIModel:         "",
+		WeComCorpID:     relayWeComCorpID,
+		WeComAgentID:    relayWeComAgentID,
+		WeComSecret:     relayWeComSecret,
+		WeComToken:      relayWeComToken,
+		WeComAESKey:     relayWeComAESKey,
+		WeChatAppID:     relayWeChatAppID,
+		WeChatAppSecret: relayWeChatAppSecret,
+		Transcriber:     transcriber,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating relay platform: %v\n", err)
@@ -444,7 +373,6 @@ func runRelay(cmd *cobra.Command, args []string) {
 	}
 
 	log.Printf("Relay connected. User: %s, Platform: %s", relayUserID, relayPlatform)
-	log.Printf("AI Provider: %s, Model: %s", providerName, modelName)
 	log.Println("Press Ctrl+C to stop.")
 
 	// Wait for shutdown signal

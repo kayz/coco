@@ -6,7 +6,6 @@ import (
 
 	"github.com/kayz/coco/internal/config"
 	"github.com/kayz/coco/internal/logger"
-	"github.com/kayz/coco/internal/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -22,22 +21,18 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "coco",
-	Short: "coco — personal AI assistant (cowork & copilot)",
-	Long: `coco is a personal AI assistant system with dual-agent architecture.
+	Short: "coco relay/keeper runtime",
+	Long: `coco runtime modes:
 
 Modes:
-  coco           Run as local AI assistant (default)
+  coco           Run relay mode (default)
+  coco relay     Run as relay client
   coco keeper    Run as public-facing relay server (Keeper mode)
-  coco router    Run as message router with platform integrations
-
-It provides tools for:
-  - File operations (read, write, list, search)
-  - Shell command execution
-  - System information (CPU, memory, disk)
-  - Process management
-  - Network information
-  - Browser automation
-  - Multi-platform messaging (WeCom, Feishu, Telegram, Slack, Discord...)`,
+  coco both      Run keeper + relay in one process`,
+	CompletionOptions: cobra.CompletionOptions{
+		DisableDefaultCmd: true,
+	},
+	Run: runRelay,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		// Parse and set log level
 		level, err := logger.ParseLevel(logLevel)
@@ -88,18 +83,6 @@ func loadDisableFileTools() bool {
 		return cfg.Security.DisableFileTools
 	}
 	return false
-}
-
-// loadSecurityOptions returns MCP security options from config file.
-func loadSecurityOptions() mcp.SecurityOptions {
-	cfg, err := config.Load()
-	if err != nil {
-		return mcp.SecurityOptions{}
-	}
-	return mcp.SecurityOptions{
-		AllowedPaths:     cfg.Security.AllowedPaths,
-		DisableFileTools: cfg.Security.DisableFileTools,
-	}
 }
 
 // updateSearchConfig updates the search configuration in the config file

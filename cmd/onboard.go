@@ -2,1239 +2,1108 @@ package cmd
 
 import (
 	"bufio"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
-	"os/exec"
-	"runtime"
+	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/kayz/coco/internal/ai"
 	"github.com/kayz/coco/internal/config"
+	"github.com/kayz/coco/internal/service"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 var (
-	onboardProvider             string
-	onboardAPIKey               string
-	onboardBaseURL              string
-	onboardModel                string
-	onboardPlatform             string
-	onboardMode                 string
-	onboardReset                bool
-	onboardRelayUserID          string
-	onboardMetasoAPIKey         string
-	onboardTavilyAPIKey         string
-	onboardSearchEngine         string
-	onboardAutoSearch           bool
-	onboardCustomEngine         string
-	onboardCustomType           string
-	onboardCustomAPIKey         string
-	onboardCustomBaseURL        string
-	onboardEmbeddingProvider    string
-	onboardEmbeddingAPIKey      string
-	onboardEmbeddingBaseURL     string
-	onboardEmbeddingModel       string
-	onboardEmbeddingEnabled     bool
-	// WeCom
-	onboardWeComCorpID  string
-	onboardWeComAgentID string
-	onboardWeComSecret  string
-	onboardWeComToken   string
-	onboardWeComAESKey  string
-	// Slack
-	onboardSlackBotToken string
-	onboardSlackAppToken string
-	// Telegram
-	onboardTelegramToken string
-	// Discord
-	onboardDiscordToken string
-	// Feishu
-	onboardFeishuAppID     string
-	onboardFeishuAppSecret string
-	// DingTalk
-	onboardDingTalkClientID     string
-	onboardDingTalkClientSecret string
-	// WhatsApp
-	onboardWhatsAppPhoneID     string
-	onboardWhatsAppAccessToken string
-	onboardWhatsAppVerifyToken string
-	// LINE
-	onboardLINEChannelSecret string
-	onboardLINEChannelToken  string
-	// Teams
-	onboardTeamsAppID       string
-	onboardTeamsAppPassword string
-	onboardTeamsTenantID    string
-	// Matrix
-	onboardMatrixHomeserverURL string
-	onboardMatrixUserID        string
-	onboardMatrixAccessToken   string
-	// Google Chat
-	onboardGoogleChatProjectID       string
-	onboardGoogleChatCredentialsFile string
-	// Mattermost
-	onboardMattermostServerURL string
-	onboardMattermostToken     string
-	onboardMattermostTeamName  string
-	// iMessage
-	onboardBlueBubblesURL      string
-	onboardBlueBubblesPassword string
-	// Signal
-	onboardSignalAPIURL      string
-	onboardSignalPhoneNumber string
-	// Twitch
-	onboardTwitchToken   string
-	onboardTwitchChannel string
-	onboardTwitchBotName string
-	// NOSTR
-	onboardNOSTRPrivateKey string
-	onboardNOSTRRelays     string
-	// Zalo
-	onboardZaloAppID       string
-	onboardZaloSecretKey   string
-	onboardZaloAccessToken string
-	// Nextcloud
-	onboardNextcloudServerURL string
-	onboardNextcloudUsername  string
-	onboardNextcloudPassword  string
-	onboardNextcloudRoomToken string
+	onboardMode           string
+	onboardNonInteractive bool
+	onboardSetValues      []string
+	onboardSkipService    bool
 )
 
 var onboardCmd = &cobra.Command{
 	Use:   "onboard",
-	Short: "Interactive setup wizard for first-time configuration",
-	Long: `Interactive setup wizard that saves AI provider and platform credentials
-to a config file. After running onboard once, you can use 'relay' or 'router'
-without passing any flags.
+	Short: "Interactive setup for relay/keeper/both",
+	Long: `Interactive setup for relay/keeper/both.
 
-Usage:
-  coco onboard              # Interactive wizard
-  coco onboard --reset      # Clear config and start fresh
-  coco onboard --provider deepseek --api-key sk-xxx  # Non-interactive
+The wizard writes:
+  - .coco.yaml              Runtime config (mode, relay, keeper, platform creds)
+  - .coco/providers.yaml    AI provider config
+  - .coco/models.yaml       AI model config
 
-Config saved to:
-  macOS: ~/Library/Preferences/Lingti/bot.yaml
-  Linux: ~/.config/coco/bot.yaml`,
-	Run: runOnboard,
+It is intentionally step-based so new onboarding sections can be added later
+without breaking existing flows.`,
+	RunE: runOnboard,
 }
 
 func init() {
 	rootCmd.AddCommand(onboardCmd)
 
-	onboardCmd.Flags().StringVar(&onboardProvider, "provider", "", "AI provider: deepseek, qwen, claude, kimi, minimax, doubao, zhipu, openai, gemini, yi, stepfun, baichuan, spark, siliconflow, grok")
-	onboardCmd.Flags().StringVar(&onboardAPIKey, "api-key", "", "AI API key")
-	onboardCmd.Flags().StringVar(&onboardBaseURL, "base-url", "", "Custom API base URL")
-	onboardCmd.Flags().StringVar(&onboardModel, "model", "", "Model name")
-	onboardCmd.Flags().StringVar(&onboardPlatform, "platform", "", "Platform: wecom, wechat, dingtalk, feishu, slack, telegram, discord")
-	onboardCmd.Flags().StringVar(&onboardMode, "mode", "", "Connection mode: relay, router")
-	onboardCmd.Flags().BoolVar(&onboardReset, "reset", false, "Clear existing config and start fresh")
-	onboardCmd.Flags().StringVar(&onboardRelayUserID, "relay-user-id", "", "Relay user ID (from /whoami)")
-
-	// Embedding
-	onboardCmd.Flags().StringVar(&onboardEmbeddingProvider, "embedding-provider", "", "Embedding provider: qwen, openai")
-	onboardCmd.Flags().StringVar(&onboardEmbeddingAPIKey, "embedding-api-key", "", "Embedding API key")
-	onboardCmd.Flags().StringVar(&onboardEmbeddingBaseURL, "embedding-base-url", "", "Custom embedding API base URL")
-	onboardCmd.Flags().StringVar(&onboardEmbeddingModel, "embedding-model", "", "Embedding model name")
-	onboardCmd.Flags().BoolVar(&onboardEmbeddingEnabled, "embedding-enabled", false, "Enable memory system with RAG")
-
-	// Search
-	onboardCmd.Flags().StringVar(&onboardMetasoAPIKey, "metaso-api-key", "", "Metaso search API key")
-	onboardCmd.Flags().StringVar(&onboardTavilyAPIKey, "tavily-api-key", "", "Tavily search API key")
-	onboardCmd.Flags().StringVar(&onboardSearchEngine, "search-engine", "", "Primary search engine: metaso, tavily")
-	onboardCmd.Flags().BoolVar(&onboardAutoSearch, "auto-search", true, "Enable automatic search for uncertain queries")
-	onboardCmd.Flags().StringVar(&onboardCustomEngine, "custom-search-name", "", "Custom search engine name")
-	onboardCmd.Flags().StringVar(&onboardCustomType, "custom-search-type", "", "Custom search engine type (custom_http)")
-	onboardCmd.Flags().StringVar(&onboardCustomAPIKey, "custom-search-api-key", "", "Custom search engine API key")
-	onboardCmd.Flags().StringVar(&onboardCustomBaseURL, "custom-search-base-url", "", "Custom search engine base URL")
-
-	// WeCom
-	onboardCmd.Flags().StringVar(&onboardWeComCorpID, "wecom-corp-id", "", "WeCom Corp ID")
-	onboardCmd.Flags().StringVar(&onboardWeComAgentID, "wecom-agent-id", "", "WeCom Agent ID")
-	onboardCmd.Flags().StringVar(&onboardWeComSecret, "wecom-secret", "", "WeCom Secret")
-	onboardCmd.Flags().StringVar(&onboardWeComToken, "wecom-token", "", "WeCom Callback Token")
-	onboardCmd.Flags().StringVar(&onboardWeComAESKey, "wecom-aes-key", "", "WeCom EncodingAESKey")
-	// Slack
-	onboardCmd.Flags().StringVar(&onboardSlackBotToken, "slack-bot-token", "", "Slack Bot Token")
-	onboardCmd.Flags().StringVar(&onboardSlackAppToken, "slack-app-token", "", "Slack App Token")
-	// Telegram
-	onboardCmd.Flags().StringVar(&onboardTelegramToken, "telegram-token", "", "Telegram Bot Token")
-	// Discord
-	onboardCmd.Flags().StringVar(&onboardDiscordToken, "discord-token", "", "Discord Bot Token")
-	// Feishu
-	onboardCmd.Flags().StringVar(&onboardFeishuAppID, "feishu-app-id", "", "Feishu App ID")
-	onboardCmd.Flags().StringVar(&onboardFeishuAppSecret, "feishu-app-secret", "", "Feishu App Secret")
-	// DingTalk
-	onboardCmd.Flags().StringVar(&onboardDingTalkClientID, "dingtalk-client-id", "", "DingTalk AppKey")
-	onboardCmd.Flags().StringVar(&onboardDingTalkClientSecret, "dingtalk-client-secret", "", "DingTalk AppSecret")
-	// WhatsApp
-	onboardCmd.Flags().StringVar(&onboardWhatsAppPhoneID, "whatsapp-phone-id", "", "WhatsApp Phone Number ID")
-	onboardCmd.Flags().StringVar(&onboardWhatsAppAccessToken, "whatsapp-access-token", "", "WhatsApp Access Token")
-	onboardCmd.Flags().StringVar(&onboardWhatsAppVerifyToken, "whatsapp-verify-token", "", "WhatsApp Verify Token")
-	// LINE
-	onboardCmd.Flags().StringVar(&onboardLINEChannelSecret, "line-channel-secret", "", "LINE Channel Secret")
-	onboardCmd.Flags().StringVar(&onboardLINEChannelToken, "line-channel-token", "", "LINE Channel Token")
-	// Teams
-	onboardCmd.Flags().StringVar(&onboardTeamsAppID, "teams-app-id", "", "Teams App ID")
-	onboardCmd.Flags().StringVar(&onboardTeamsAppPassword, "teams-app-password", "", "Teams App Password")
-	onboardCmd.Flags().StringVar(&onboardTeamsTenantID, "teams-tenant-id", "", "Teams Tenant ID")
-	// Matrix
-	onboardCmd.Flags().StringVar(&onboardMatrixHomeserverURL, "matrix-homeserver-url", "", "Matrix Homeserver URL")
-	onboardCmd.Flags().StringVar(&onboardMatrixUserID, "matrix-user-id", "", "Matrix User ID")
-	onboardCmd.Flags().StringVar(&onboardMatrixAccessToken, "matrix-access-token", "", "Matrix Access Token")
-	// Google Chat
-	onboardCmd.Flags().StringVar(&onboardGoogleChatProjectID, "googlechat-project-id", "", "Google Chat Project ID")
-	onboardCmd.Flags().StringVar(&onboardGoogleChatCredentialsFile, "googlechat-credentials-file", "", "Google Chat Credentials File")
-	// Mattermost
-	onboardCmd.Flags().StringVar(&onboardMattermostServerURL, "mattermost-server-url", "", "Mattermost Server URL")
-	onboardCmd.Flags().StringVar(&onboardMattermostToken, "mattermost-token", "", "Mattermost Token")
-	onboardCmd.Flags().StringVar(&onboardMattermostTeamName, "mattermost-team-name", "", "Mattermost Team Name")
-	// iMessage
-	onboardCmd.Flags().StringVar(&onboardBlueBubblesURL, "bluebubbles-url", "", "BlueBubbles Server URL")
-	onboardCmd.Flags().StringVar(&onboardBlueBubblesPassword, "bluebubbles-password", "", "BlueBubbles Password")
-	// Signal
-	onboardCmd.Flags().StringVar(&onboardSignalAPIURL, "signal-api-url", "", "Signal API URL")
-	onboardCmd.Flags().StringVar(&onboardSignalPhoneNumber, "signal-phone-number", "", "Signal Phone Number")
-	// Twitch
-	onboardCmd.Flags().StringVar(&onboardTwitchToken, "twitch-token", "", "Twitch OAuth Token")
-	onboardCmd.Flags().StringVar(&onboardTwitchChannel, "twitch-channel", "", "Twitch Channel")
-	onboardCmd.Flags().StringVar(&onboardTwitchBotName, "twitch-bot-name", "", "Twitch Bot Name")
-	// NOSTR
-	onboardCmd.Flags().StringVar(&onboardNOSTRPrivateKey, "nostr-private-key", "", "NOSTR Private Key")
-	onboardCmd.Flags().StringVar(&onboardNOSTRRelays, "nostr-relays", "", "NOSTR Relay URLs (comma-separated)")
-	// Zalo
-	onboardCmd.Flags().StringVar(&onboardZaloAppID, "zalo-app-id", "", "Zalo App ID")
-	onboardCmd.Flags().StringVar(&onboardZaloSecretKey, "zalo-secret-key", "", "Zalo Secret Key")
-	onboardCmd.Flags().StringVar(&onboardZaloAccessToken, "zalo-access-token", "", "Zalo Access Token")
-	// Nextcloud
-	onboardCmd.Flags().StringVar(&onboardNextcloudServerURL, "nextcloud-server-url", "", "Nextcloud Server URL")
-	onboardCmd.Flags().StringVar(&onboardNextcloudUsername, "nextcloud-username", "", "Nextcloud Username")
-	onboardCmd.Flags().StringVar(&onboardNextcloudPassword, "nextcloud-password", "", "Nextcloud Password")
-	onboardCmd.Flags().StringVar(&onboardNextcloudRoomToken, "nextcloud-room-token", "", "Nextcloud Talk Room Token")
+	onboardCmd.Flags().StringVar(&onboardMode, "mode", "", "Mode: relay, keeper, both")
+	onboardCmd.Flags().BoolVar(&onboardNonInteractive, "non-interactive", false, "Fail if required values are missing instead of prompting")
+	onboardCmd.Flags().StringArrayVar(&onboardSetValues, "set", nil, "Pre-fill answers as key=value (repeatable)")
+	onboardCmd.Flags().BoolVar(&onboardSkipService, "skip-service", false, "Skip service installation prompts")
 }
 
-var scanner *bufio.Scanner
-
-func initScanner() {
-	scanner = bufio.NewScanner(os.Stdin)
+type onboardQuestion struct {
+	Key       string
+	Prompt    string
+	Required  bool
+	Default   func(*onboardState) string
+	Validate  func(string, *onboardState) error
+	Condition func(*onboardState) bool
 }
 
-func promptText(prompt string, defaultVal string) string {
-	if defaultVal != "" {
-		fmt.Printf("  %s (default: %s):\n  > ", prompt, defaultVal)
-	} else {
-		fmt.Printf("  %s:\n  > ", prompt)
-	}
-	scanner.Scan()
-	val := strings.TrimSpace(scanner.Text())
-	if val == "" {
-		return defaultVal
-	}
-	return val
+type onboardStep struct {
+	Name      string
+	Questions []onboardQuestion
+	Apply     func(*onboardState) error
 }
 
-func promptSelect(prompt string, options []string, defaultIdx int) int {
-	fmt.Printf("\n  %s\n", prompt)
-	for i, opt := range options {
-		fmt.Printf("    %d. %s\n", i+1, opt)
-	}
-	fmt.Printf("  Choice [%d]: ", defaultIdx+1)
-	scanner.Scan()
-	val := strings.TrimSpace(scanner.Text())
-	if val == "" {
-		return defaultIdx
-	}
-	n, err := strconv.Atoi(val)
-	if err != nil || n < 1 || n > len(options) {
-		return defaultIdx
-	}
-	return n - 1
+type onboardState struct {
+	cfg            *config.Config
+	mode           string
+	answers        map[string]string
+	prefill        map[string]string
+	reader         *bufio.Reader
+	nonInteractive bool
 }
 
-func maskKey(key string) string {
-	if len(key) <= 8 {
-		return "***"
-	}
-	return key[:4] + "..." + key[len(key)-4:]
+type providerTemplate struct {
+	Name           string
+	Type           string
+	DefaultBaseURL string
+	PrimaryModel   modelTemplate
+	FallbackModel  string
 }
 
-func runOnboard(cmd *cobra.Command, args []string) {
-	if onboardReset {
-		path := config.ConfigPath()
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "Error removing config: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("Config cleared: %s\n", path)
-	}
-
-	cfg, _ := config.Load()
-
-	if hasOnboardFlags(cmd) {
-		applyOnboardFlags(cfg, cmd)
-	} else {
-		initScanner()
-		runInteractiveWizard(cfg)
-	}
-
-	if err := cfg.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
-		os.Exit(1)
-	}
-
-	printOnboardSummary(cfg)
+type modelTemplate struct {
+	Code      string
+	Intellect string
+	Speed     string
+	Cost      string
+	Skills    []string
 }
 
-func hasOnboardFlags(_ *cobra.Command) bool {
-	return onboardProvider != "" || onboardAPIKey != "" || onboardPlatform != "" ||
-		onboardMetasoAPIKey != "" || onboardTavilyAPIKey != "" || onboardSearchEngine != "" ||
-		onboardCustomEngine != "" || onboardEmbeddingProvider != "" || onboardEmbeddingAPIKey != "" ||
-		onboardEmbeddingModel != ""
+var providerTemplates = map[string]providerTemplate{
+	"deepseek": {
+		Name:           "deepseek",
+		Type:           "deepseek",
+		DefaultBaseURL: "https://api.deepseek.com/v1",
+		PrimaryModel:   modelTemplate{Code: "deepseek-chat", Intellect: "excellent", Speed: "fast", Cost: "medium"},
+		FallbackModel:  "deepseek-reasoner",
+	},
+	"qwen": {
+		Name:           "qwen",
+		Type:           "qwen",
+		DefaultBaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		PrimaryModel:   modelTemplate{Code: "qwen-plus", Intellect: "excellent", Speed: "fast", Cost: "medium"},
+		FallbackModel:  "qwen-turbo",
+	},
+	"openai": {
+		Name:           "openai",
+		Type:           "openai",
+		DefaultBaseURL: "https://api.openai.com/v1",
+		PrimaryModel:   modelTemplate{Code: "gpt-4o", Intellect: "full", Speed: "fast", Cost: "high", Skills: []string{"multimodal", "thinking"}},
+		FallbackModel:  "gpt-4o-mini",
+	},
+	"claude": {
+		Name:           "claude",
+		Type:           "claude",
+		DefaultBaseURL: "https://api.anthropic.com/v1",
+		PrimaryModel:   modelTemplate{Code: "claude-sonnet-4-20250514", Intellect: "full", Speed: "fast", Cost: "high", Skills: []string{"multimodal", "thinking"}},
+		FallbackModel:  "claude-3-5-sonnet-20241022",
+	},
+	"kimi": {
+		Name:           "kimi",
+		Type:           "kimi",
+		DefaultBaseURL: "https://api.moonshot.cn/v1",
+		PrimaryModel:   modelTemplate{Code: "moonshot-v1-8k", Intellect: "good", Speed: "fast", Cost: "low"},
+		FallbackModel:  "moonshot-v1-32k",
+	},
 }
 
-func applyOnboardFlags(cfg *config.Config, cmd *cobra.Command) {
-	if onboardProvider != "" {
-		cfg.AI.Provider = onboardProvider
-	}
-	if onboardAPIKey != "" {
-		cfg.AI.APIKey = onboardAPIKey
-	}
-	if onboardBaseURL != "" {
-		cfg.AI.BaseURL = onboardBaseURL
-	}
-	if onboardModel != "" {
-		cfg.AI.Model = onboardModel
-	}
-
-	// Embedding config
-	if onboardEmbeddingProvider != "" {
-		cfg.Embedding.Provider = onboardEmbeddingProvider
-	}
-	if onboardEmbeddingAPIKey != "" {
-		cfg.Embedding.APIKey = onboardEmbeddingAPIKey
-	}
-	if onboardEmbeddingBaseURL != "" {
-		cfg.Embedding.BaseURL = onboardEmbeddingBaseURL
-	}
-	if onboardEmbeddingModel != "" {
-		cfg.Embedding.Model = onboardEmbeddingModel
-	}
-	if cmd.Flags().Changed("embedding-enabled") {
-		cfg.Embedding.Enabled = onboardEmbeddingEnabled
-	}
-	if onboardMode != "" {
-		cfg.Mode = onboardMode
-	}
-
-	// Relay user ID
-	if onboardRelayUserID != "" {
-		cfg.Relay.UserID = onboardRelayUserID
-	}
-
-	// Platform credentials
-	switch onboardPlatform {
-	case "wecom":
-		if onboardWeComCorpID != "" {
-			cfg.Platforms.WeCom.CorpID = onboardWeComCorpID
-		}
-		if onboardWeComAgentID != "" {
-			cfg.Platforms.WeCom.AgentID = onboardWeComAgentID
-		}
-		if onboardWeComSecret != "" {
-			cfg.Platforms.WeCom.Secret = onboardWeComSecret
-		}
-		if onboardWeComToken != "" {
-			cfg.Platforms.WeCom.Token = onboardWeComToken
-		}
-		if onboardWeComAESKey != "" {
-			cfg.Platforms.WeCom.AESKey = onboardWeComAESKey
-		}
-	case "wechat":
-		cfg.Relay.Platform = "wechat"
-		cfg.Mode = "relay"
-	case "slack":
-		if onboardSlackBotToken != "" {
-			cfg.Platforms.Slack.BotToken = onboardSlackBotToken
-		}
-		if onboardSlackAppToken != "" {
-			cfg.Platforms.Slack.AppToken = onboardSlackAppToken
-		}
-	case "telegram":
-		if onboardTelegramToken != "" {
-			cfg.Platforms.Telegram.Token = onboardTelegramToken
-		}
-	case "discord":
-		if onboardDiscordToken != "" {
-			cfg.Platforms.Discord.Token = onboardDiscordToken
-		}
-	case "feishu":
-		if onboardFeishuAppID != "" {
-			cfg.Platforms.Feishu.AppID = onboardFeishuAppID
-		}
-		if onboardFeishuAppSecret != "" {
-			cfg.Platforms.Feishu.AppSecret = onboardFeishuAppSecret
-		}
-	case "dingtalk":
-		if onboardDingTalkClientID != "" {
-			cfg.Platforms.DingTalk.ClientID = onboardDingTalkClientID
-		}
-		if onboardDingTalkClientSecret != "" {
-			cfg.Platforms.DingTalk.ClientSecret = onboardDingTalkClientSecret
-		}
-	case "whatsapp":
-		if onboardWhatsAppPhoneID != "" {
-			cfg.Platforms.WhatsApp.PhoneNumberID = onboardWhatsAppPhoneID
-		}
-		if onboardWhatsAppAccessToken != "" {
-			cfg.Platforms.WhatsApp.AccessToken = onboardWhatsAppAccessToken
-		}
-		if onboardWhatsAppVerifyToken != "" {
-			cfg.Platforms.WhatsApp.VerifyToken = onboardWhatsAppVerifyToken
-		}
-	case "line":
-		if onboardLINEChannelSecret != "" {
-			cfg.Platforms.LINE.ChannelSecret = onboardLINEChannelSecret
-		}
-		if onboardLINEChannelToken != "" {
-			cfg.Platforms.LINE.ChannelToken = onboardLINEChannelToken
-		}
-	case "teams":
-		if onboardTeamsAppID != "" {
-			cfg.Platforms.Teams.AppID = onboardTeamsAppID
-		}
-		if onboardTeamsAppPassword != "" {
-			cfg.Platforms.Teams.AppPassword = onboardTeamsAppPassword
-		}
-		if onboardTeamsTenantID != "" {
-			cfg.Platforms.Teams.TenantID = onboardTeamsTenantID
-		}
-	case "matrix":
-		if onboardMatrixHomeserverURL != "" {
-			cfg.Platforms.Matrix.HomeserverURL = onboardMatrixHomeserverURL
-		}
-		if onboardMatrixUserID != "" {
-			cfg.Platforms.Matrix.UserID = onboardMatrixUserID
-		}
-		if onboardMatrixAccessToken != "" {
-			cfg.Platforms.Matrix.AccessToken = onboardMatrixAccessToken
-		}
-	case "googlechat":
-		if onboardGoogleChatProjectID != "" {
-			cfg.Platforms.GoogleChat.ProjectID = onboardGoogleChatProjectID
-		}
-		if onboardGoogleChatCredentialsFile != "" {
-			cfg.Platforms.GoogleChat.CredentialsFile = onboardGoogleChatCredentialsFile
-		}
-	case "mattermost":
-		if onboardMattermostServerURL != "" {
-			cfg.Platforms.Mattermost.ServerURL = onboardMattermostServerURL
-		}
-		if onboardMattermostToken != "" {
-			cfg.Platforms.Mattermost.Token = onboardMattermostToken
-		}
-		if onboardMattermostTeamName != "" {
-			cfg.Platforms.Mattermost.TeamName = onboardMattermostTeamName
-		}
-	case "imessage":
-		if onboardBlueBubblesURL != "" {
-			cfg.Platforms.IMessage.BlueBubblesURL = onboardBlueBubblesURL
-		}
-		if onboardBlueBubblesPassword != "" {
-			cfg.Platforms.IMessage.BlueBubblesPassword = onboardBlueBubblesPassword
-		}
-	case "signal":
-		if onboardSignalAPIURL != "" {
-			cfg.Platforms.Signal.APIURL = onboardSignalAPIURL
-		}
-		if onboardSignalPhoneNumber != "" {
-			cfg.Platforms.Signal.PhoneNumber = onboardSignalPhoneNumber
-		}
-	case "twitch":
-		if onboardTwitchToken != "" {
-			cfg.Platforms.Twitch.Token = onboardTwitchToken
-		}
-		if onboardTwitchChannel != "" {
-			cfg.Platforms.Twitch.Channel = onboardTwitchChannel
-		}
-		if onboardTwitchBotName != "" {
-			cfg.Platforms.Twitch.BotName = onboardTwitchBotName
-		}
-	case "nostr":
-		if onboardNOSTRPrivateKey != "" {
-			cfg.Platforms.NOSTR.PrivateKey = onboardNOSTRPrivateKey
-		}
-		if onboardNOSTRRelays != "" {
-			cfg.Platforms.NOSTR.Relays = onboardNOSTRRelays
-		}
-	case "zalo":
-		if onboardZaloAppID != "" {
-			cfg.Platforms.Zalo.AppID = onboardZaloAppID
-		}
-		if onboardZaloSecretKey != "" {
-			cfg.Platforms.Zalo.SecretKey = onboardZaloSecretKey
-		}
-		if onboardZaloAccessToken != "" {
-			cfg.Platforms.Zalo.AccessToken = onboardZaloAccessToken
-		}
-	case "nextcloud":
-		if onboardNextcloudServerURL != "" {
-			cfg.Platforms.Nextcloud.ServerURL = onboardNextcloudServerURL
-		}
-		if onboardNextcloudUsername != "" {
-			cfg.Platforms.Nextcloud.Username = onboardNextcloudUsername
-		}
-		if onboardNextcloudPassword != "" {
-			cfg.Platforms.Nextcloud.Password = onboardNextcloudPassword
-		}
-		if onboardNextcloudRoomToken != "" {
-			cfg.Platforms.Nextcloud.RoomToken = onboardNextcloudRoomToken
-		}
-	}
-
-	// Search config
-	if onboardMetasoAPIKey != "" {
-		for i := range cfg.Search.Engines {
-			if cfg.Search.Engines[i].Name == "metaso" {
-				cfg.Search.Engines[i].APIKey = onboardMetasoAPIKey
-			}
-		}
-	}
-	if onboardTavilyAPIKey != "" {
-		for i := range cfg.Search.Engines {
-			if cfg.Search.Engines[i].Name == "tavily" {
-				cfg.Search.Engines[i].APIKey = onboardTavilyAPIKey
-			}
-		}
-	}
-	if onboardSearchEngine != "" {
-		cfg.Search.PrimaryEngine = onboardSearchEngine
-	}
-	if cmd.Flags().Changed("auto-search") {
-		cfg.Search.AutoSearch = onboardAutoSearch
-	}
-	if onboardCustomEngine != "" {
-		customEngine := config.SearchEngineConfig{
-			Name:    onboardCustomEngine,
-			Type:    onboardCustomType,
-			APIKey:  onboardCustomAPIKey,
-			BaseURL: onboardCustomBaseURL,
-			Enabled: true,
-			Priority: len(cfg.Search.Engines) + 1,
-		}
-		if customEngine.Type == "" {
-			customEngine.Type = "custom_http"
-		}
-		cfg.Search.Engines = append(cfg.Search.Engines, customEngine)
-	}
+type providersYAML struct {
+	Providers []providerYAML `yaml:"providers"`
 }
 
-func runInteractiveWizard(cfg *config.Config) {
-	fmt.Println()
-	fmt.Println("  coco -- Interactive Setup")
-	fmt.Println("  ───────────────────────────────────")
-
-	// Show existing config if present
-	if cfg.AI.Provider != "" {
-		fmt.Printf("\n  Existing config found: %s / %s\n", cfg.AI.Provider, maskKey(cfg.AI.APIKey))
-		idx := promptSelect("What would you like to do?", []string{
-			"Update existing config",
-			"Start fresh",
-			"Keep and exit",
-		}, 0)
-		if idx == 2 {
-			return
-		}
-		if idx == 1 {
-			*cfg = *config.DefaultConfig()
-		}
-	}
-
-	stepAIProvider(cfg)
-	stepEmbeddingConfig(cfg)
-	stepPlatform(cfg)
-	stepConnectionMode(cfg)
-	stepSearchConfig(cfg)
+type providerYAML struct {
+	Name    string `yaml:"name"`
+	Type    string `yaml:"type"`
+	BaseURL string `yaml:"base_url"`
+	APIKey  string `yaml:"api_key"`
 }
 
-type providerInfo struct {
-	name     string
-	label    string
-	keyURL   string
-	defModel string
+type modelsYAML struct {
+	Models []modelYAML `yaml:"models"`
 }
 
-var providers = []providerInfo{
-	{"deepseek", "deepseek     (recommended)", "https://platform.deepseek.com/api_keys", "deepseek-chat"},
-	{"qwen", "qwen         (tongyi qianwen)", "https://bailian.console.aliyun.com/", "qwen-plus"},
-	{"claude", "claude       (Anthropic)", "https://console.anthropic.com/", "claude-sonnet-4-20250514"},
-	{"kimi", "kimi         (Moonshot)", "https://platform.moonshot.cn/", "moonshot-v1-8k"},
-	{"minimax", "minimax      (MiniMax/海螺)", "https://platform.minimaxi.com/", "MiniMax-Text-01"},
-	{"doubao", "doubao       (ByteDance/豆包)", "https://console.volcengine.com/ark", "doubao-pro-32k"},
-	{"zhipu", "zhipu        (GLM/智谱)", "https://open.bigmodel.cn/", "glm-4-flash"},
-	{"openai", "openai       (GPT)", "https://platform.openai.com/api-keys", "gpt-4o"},
-	{"gemini", "gemini       (Google)", "https://aistudio.google.com/apikey", "gemini-2.0-flash"},
-	{"yi", "yi           (Lingyiwanwu/零一)", "https://platform.lingyiwanwu.com/", "yi-large"},
-	{"stepfun", "stepfun      (StepFun/阶跃)", "https://platform.stepfun.com/", "step-2-16k"},
-	{"baichuan", "baichuan     (Baichuan/百川)", "https://platform.baichuan-ai.com/", "Baichuan4"},
-	{"spark", "spark        (iFlytek/讯飞星火)", "https://console.xfyun.cn/", "generalv3.5"},
-	{"siliconflow", "siliconflow  (aggregator/硅基流动)", "https://cloud.siliconflow.cn/", "Qwen/Qwen2.5-72B-Instruct"},
-	{"grok", "grok         (xAI)", "https://console.x.ai/", "grok-2-latest"},
+type modelYAML struct {
+	Name      string   `yaml:"name"`
+	Code      string   `yaml:"code"`
+	Provider  string   `yaml:"provider"`
+	Intellect string   `yaml:"intellect"`
+	Speed     string   `yaml:"speed"`
+	Cost      string   `yaml:"cost"`
+	Skills    []string `yaml:"skills"`
 }
 
-// detectClaudeOAuthToken tries to find an existing Claude OAuth token from env vars or macOS Keychain.
-func detectClaudeOAuthToken() string {
-	// 1. Check ANTHROPIC_OAUTH_TOKEN env var
-	if tok := os.Getenv("ANTHROPIC_OAUTH_TOKEN"); tok != "" && strings.HasPrefix(tok, "sk-ant-oat") {
-		return tok
-	}
-
-	// 2. macOS Keychain: Claude Code stores credentials under "Claude Code-credentials"
-	if runtime.GOOS == "darwin" {
-		if tok := readClaudeKeychain(); tok != "" {
-			return tok
-		}
-	}
-
-	// 3. Check ANTHROPIC_API_KEY if it looks like an OAuth token
-	if tok := os.Getenv("ANTHROPIC_API_KEY"); tok != "" && strings.HasPrefix(tok, "sk-ant-oat") {
-		return tok
-	}
-
-	return ""
-}
-
-// detectClaudeAPIKey tries to find an existing Anthropic API key from env vars.
-func detectClaudeAPIKey() string {
-	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" && strings.HasPrefix(key, "sk-ant-") && !strings.HasPrefix(key, "sk-ant-oat") {
-		return key
-	}
-	return ""
-}
-
-// readClaudeKeychain reads the Claude Code OAuth token from macOS Keychain.
-func readClaudeKeychain() string {
-	out, err := exec.Command("security", "find-generic-password", "-s", "Claude Code-credentials", "-w").Output()
+func runOnboard(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load()
 	if err != nil {
-		return ""
+		cfg = config.DefaultConfig()
 	}
 
-	var creds struct {
-		ClaudeAiOauth struct {
-			AccessToken string `json:"accessToken"`
-		} `json:"claudeAiOauth"`
-	}
-	if err := json.Unmarshal(out, &creds); err != nil {
-		return ""
+	prefill, err := parseSetValues(onboardSetValues)
+	if err != nil {
+		return err
 	}
 
-	tok := creds.ClaudeAiOauth.AccessToken
-	if strings.HasPrefix(tok, "sk-ant-oat") {
-		return tok
+	state := &onboardState{
+		cfg:            cfg,
+		answers:        make(map[string]string),
+		prefill:        prefill,
+		reader:         bufio.NewReader(os.Stdin),
+		nonInteractive: onboardNonInteractive,
+	}
+
+	steps := []onboardStep{
+		modeStep(),
+		aiStep(),
+		modeConfigStep(),
+	}
+
+	fmt.Println("=== coco onboard ===")
+
+	for _, step := range steps {
+		if err := runOnboardStep(state, step); err != nil {
+			return fmt.Errorf("%s step failed: %w", step.Name, err)
+		}
+	}
+
+	if err := state.cfg.Save(); err != nil {
+		return fmt.Errorf("failed to save .coco.yaml: %w", err)
+	}
+
+	if err := writeAIRegistry(state); err != nil {
+		return err
+	}
+
+	fmt.Println()
+	fmt.Printf("Mode configured: %s\n", state.mode)
+	fmt.Printf("Config saved: %s\n", config.ConfigPath())
+	fmt.Printf("Providers:    %s\n", ai.ProvidersPath())
+	fmt.Printf("Models:       %s\n", ai.ModelsPath())
+
+	if !onboardSkipService {
+		if err := maybeInstallService(state); err != nil {
+			return err
+		}
+	}
+
+	fmt.Println("Onboarding complete.")
+	return nil
+}
+
+func modeStep() onboardStep {
+	return onboardStep{
+		Name: "mode",
+		Questions: []onboardQuestion{
+			{
+				Key:      "mode",
+				Prompt:   "Select mode (relay/keeper/both)",
+				Required: true,
+				Default: func(s *onboardState) string {
+					if onboardMode != "" {
+						return onboardMode
+					}
+					if s.cfg.Mode != "" {
+						return s.cfg.Mode
+					}
+					return "relay"
+				},
+				Validate: validateModeValue,
+			},
+		},
+		Apply: func(s *onboardState) error {
+			mode, err := service.ValidateMode(s.answers["mode"])
+			if err != nil {
+				return err
+			}
+			s.mode = mode
+			s.cfg.Mode = mode
+			return nil
+		},
+	}
+}
+
+func aiStep() onboardStep {
+	return onboardStep{
+		Name: "ai",
+		Questions: []onboardQuestion{
+			{
+				Key:      "ai.provider",
+				Prompt:   "AI provider (deepseek/qwen/openai/claude/kimi/custom)",
+				Required: true,
+				Default: func(_ *onboardState) string {
+					if v := onboardValue("ai.provider", nil); v != "" {
+						return v
+					}
+					return "deepseek"
+				},
+				Validate: func(v string, _ *onboardState) error {
+					switch strings.ToLower(strings.TrimSpace(v)) {
+					case "deepseek", "qwen", "openai", "claude", "kimi", "custom":
+						return nil
+					default:
+						return fmt.Errorf("unsupported provider %q", v)
+					}
+				},
+			},
+			{
+				Key:      "ai.provider_name",
+				Prompt:   "Custom provider name",
+				Required: true,
+				Default: func(s *onboardState) string {
+					return onboardValue("ai.provider_name", s)
+				},
+				Condition: func(s *onboardState) bool {
+					return strings.EqualFold(s.answers["ai.provider"], "custom")
+				},
+				Validate: func(v string, _ *onboardState) error {
+					if strings.TrimSpace(v) == "" {
+						return errors.New("provider name cannot be empty")
+					}
+					return nil
+				},
+			},
+			{
+				Key:      "ai.provider_type",
+				Prompt:   "Custom provider type (e.g. openai/deepseek/claude)",
+				Required: true,
+				Default: func(s *onboardState) string {
+					return onboardValue("ai.provider_type", s)
+				},
+				Condition: func(s *onboardState) bool {
+					return strings.EqualFold(s.answers["ai.provider"], "custom")
+				},
+			},
+			{
+				Key:      "ai.api_key",
+				Prompt:   "AI API key",
+				Required: true,
+				Default:  func(_ *onboardState) string { return "" },
+			},
+			{
+				Key:      "ai.base_url",
+				Prompt:   "AI base URL",
+				Required: true,
+				Default:  defaultAIBaseURL,
+				Validate: func(v string, _ *onboardState) error {
+					return validateHTTPURL(v, nil)
+				},
+			},
+			{
+				Key:      "ai.model.primary",
+				Prompt:   "Primary model code",
+				Required: true,
+				Default:  defaultPrimaryModel,
+			},
+			{
+				Key:      "ai.model.fallback",
+				Prompt:   "Fallback model code (optional)",
+				Required: false,
+				Default:  defaultFallbackModel,
+			},
+		},
+		Apply: func(s *onboardState) error { return nil },
+	}
+}
+
+func modeConfigStep() onboardStep {
+	return onboardStep{
+		Name: "mode-config",
+		Questions: []onboardQuestion{
+			{
+				Key:      "relay.platform",
+				Prompt:   "Relay platform (wecom/feishu/slack/wechat)",
+				Required: true,
+				Default: func(s *onboardState) string {
+					if v := onboardValue("relay.platform", s); v != "" {
+						return v
+					}
+					if s.mode == "both" {
+						return "wecom"
+					}
+					if s.cfg.Relay.Platform != "" {
+						return s.cfg.Relay.Platform
+					}
+					return "wecom"
+				},
+				Condition: func(s *onboardState) bool {
+					return s.mode == "relay" || s.mode == "both"
+				},
+				Validate: validateRelayPlatform,
+			},
+			{
+				Key:      "relay.user_id",
+				Prompt:   "Relay user_id",
+				Required: true,
+				Default:  defaultRelayUserID,
+				Condition: func(s *onboardState) bool {
+					return s.mode == "relay" || s.mode == "both"
+				},
+			},
+			{
+				Key:      "relay.token",
+				Prompt:   "Relay token (can be empty if keeper has no token)",
+				Required: false,
+				Default:  defaultRelayToken,
+				Condition: func(s *onboardState) bool {
+					return s.mode == "relay" || s.mode == "both"
+				},
+			},
+			{
+				Key:      "relay.server_url",
+				Prompt:   "Relay WebSocket server URL",
+				Required: true,
+				Default:  defaultRelayServerURL,
+				Condition: func(s *onboardState) bool {
+					return s.mode == "relay" || s.mode == "both"
+				},
+				Validate: validateWSURL,
+			},
+			{
+				Key:      "relay.webhook_url",
+				Prompt:   "Relay webhook URL",
+				Required: true,
+				Default:  defaultRelayWebhookURL,
+				Condition: func(s *onboardState) bool {
+					return s.mode == "relay" || s.mode == "both"
+				},
+				Validate: validateHTTPURL,
+			},
+			{
+				Key:      "relay.use_media_proxy",
+				Prompt:   "Use media proxy? (yes/no)",
+				Required: true,
+				Default:  defaultUseMediaProxy,
+				Condition: func(s *onboardState) bool {
+					return s.mode == "relay" || s.mode == "both"
+				},
+				Validate: validateBool,
+			},
+			{
+				Key:      "keeper.port",
+				Prompt:   "Keeper port",
+				Required: true,
+				Default:  defaultKeeperPort,
+				Condition: func(s *onboardState) bool {
+					return s.mode == "keeper" || s.mode == "both"
+				},
+				Validate: validatePort,
+			},
+			{
+				Key:      "keeper.token",
+				Prompt:   "Keeper auth token",
+				Required: true,
+				Default:  defaultKeeperToken,
+				Condition: func(s *onboardState) bool {
+					return s.mode == "keeper" || s.mode == "both"
+				},
+			},
+			{
+				Key:      "keeper.wecom_corp_id",
+				Prompt:   "Keeper WeCom corp_id",
+				Required: true,
+				Default:  func(s *onboardState) string { return onboardValue("keeper.wecom_corp_id", s) },
+				Condition: func(s *onboardState) bool {
+					return s.mode == "keeper" || s.mode == "both"
+				},
+			},
+			{
+				Key:      "keeper.wecom_agent_id",
+				Prompt:   "Keeper WeCom agent_id",
+				Required: true,
+				Default:  func(s *onboardState) string { return onboardValue("keeper.wecom_agent_id", s) },
+				Condition: func(s *onboardState) bool {
+					return s.mode == "keeper" || s.mode == "both"
+				},
+			},
+			{
+				Key:      "keeper.wecom_secret",
+				Prompt:   "Keeper WeCom secret",
+				Required: true,
+				Default:  func(s *onboardState) string { return onboardValue("keeper.wecom_secret", s) },
+				Condition: func(s *onboardState) bool {
+					return s.mode == "keeper" || s.mode == "both"
+				},
+			},
+			{
+				Key:      "keeper.wecom_token",
+				Prompt:   "Keeper WeCom callback token",
+				Required: true,
+				Default:  func(s *onboardState) string { return onboardValue("keeper.wecom_token", s) },
+				Condition: func(s *onboardState) bool {
+					return s.mode == "keeper" || s.mode == "both"
+				},
+			},
+			{
+				Key:      "keeper.wecom_aes_key",
+				Prompt:   "Keeper WeCom AES key (43 chars)",
+				Required: true,
+				Default:  func(s *onboardState) string { return onboardValue("keeper.wecom_aes_key", s) },
+				Condition: func(s *onboardState) bool {
+					return s.mode == "keeper" || s.mode == "both"
+				},
+				Validate: validateAESKey,
+			},
+			{
+				Key:      "relay.wecom_corp_id",
+				Prompt:   "Relay WeCom corp_id (required for cloud relay only)",
+				Required: false,
+				Default:  defaultRelayWeComCorpID,
+				Condition: func(s *onboardState) bool {
+					return s.mode == "relay" && strings.EqualFold(s.answers["relay.platform"], "wecom") && isDefaultCloudRelay(s.answers["relay.server_url"])
+				},
+			},
+			{
+				Key:      "relay.wecom_agent_id",
+				Prompt:   "Relay WeCom agent_id (required for cloud relay only)",
+				Required: false,
+				Default:  func(s *onboardState) string { return onboardValue("relay.wecom_agent_id", s) },
+				Condition: func(s *onboardState) bool {
+					return s.mode == "relay" && strings.EqualFold(s.answers["relay.platform"], "wecom") && isDefaultCloudRelay(s.answers["relay.server_url"])
+				},
+			},
+			{
+				Key:      "relay.wecom_secret",
+				Prompt:   "Relay WeCom secret (required for cloud relay only)",
+				Required: false,
+				Default:  func(s *onboardState) string { return onboardValue("relay.wecom_secret", s) },
+				Condition: func(s *onboardState) bool {
+					return s.mode == "relay" && strings.EqualFold(s.answers["relay.platform"], "wecom") && isDefaultCloudRelay(s.answers["relay.server_url"])
+				},
+			},
+			{
+				Key:      "relay.wecom_token",
+				Prompt:   "Relay WeCom callback token (required for cloud relay only)",
+				Required: false,
+				Default:  func(s *onboardState) string { return onboardValue("relay.wecom_token", s) },
+				Condition: func(s *onboardState) bool {
+					return s.mode == "relay" && strings.EqualFold(s.answers["relay.platform"], "wecom") && isDefaultCloudRelay(s.answers["relay.server_url"])
+				},
+			},
+			{
+				Key:      "relay.wecom_aes_key",
+				Prompt:   "Relay WeCom AES key (required for cloud relay only)",
+				Required: false,
+				Default:  func(s *onboardState) string { return onboardValue("relay.wecom_aes_key", s) },
+				Condition: func(s *onboardState) bool {
+					return s.mode == "relay" && strings.EqualFold(s.answers["relay.platform"], "wecom") && isDefaultCloudRelay(s.answers["relay.server_url"])
+				},
+				Validate: func(v string, s *onboardState) error {
+					v = strings.TrimSpace(v)
+					if v == "" {
+						return nil
+					}
+					return validateAESKey(v, s)
+				},
+			},
+		},
+		Apply: applyModeConfig,
+	}
+}
+
+func runOnboardStep(state *onboardState, step onboardStep) error {
+	fmt.Println()
+	fmt.Printf("[%s]\n", step.Name)
+
+	for _, q := range step.Questions {
+		if q.Condition != nil && !q.Condition(state) {
+			continue
+		}
+		v, err := askQuestion(state, q)
+		if err != nil {
+			return err
+		}
+		state.answers[q.Key] = v
+	}
+
+	if step.Apply != nil {
+		return step.Apply(state)
+	}
+	return nil
+}
+
+func askQuestion(state *onboardState, q onboardQuestion) (string, error) {
+	if v, ok := state.prefill[q.Key]; ok {
+		v = strings.TrimSpace(v)
+		if v == "" && q.Default != nil {
+			v = strings.TrimSpace(q.Default(state))
+		}
+		if q.Required && v == "" {
+			return "", fmt.Errorf("%s is required", q.Key)
+		}
+		if q.Validate != nil {
+			if err := q.Validate(v, state); err != nil {
+				return "", fmt.Errorf("%s: %w", q.Key, err)
+			}
+		}
+		return v, nil
+	}
+
+	defaultValue := ""
+	if q.Default != nil {
+		defaultValue = strings.TrimSpace(q.Default(state))
+	}
+
+	if state.nonInteractive {
+		v := defaultValue
+		if q.Required && v == "" {
+			return "", fmt.Errorf("%s is required (provide with --set %s=...)", q.Key, q.Key)
+		}
+		if q.Validate != nil {
+			if err := q.Validate(v, state); err != nil {
+				return "", fmt.Errorf("%s: %w", q.Key, err)
+			}
+		}
+		return v, nil
+	}
+
+	for {
+		if defaultValue != "" {
+			fmt.Printf("%s [%s]: ", q.Prompt, defaultValue)
+		} else {
+			fmt.Printf("%s: ", q.Prompt)
+		}
+
+		line, err := state.reader.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		v := strings.TrimSpace(line)
+		if v == "" {
+			v = defaultValue
+		}
+
+		if q.Required && strings.TrimSpace(v) == "" {
+			fmt.Println("Value is required.")
+			continue
+		}
+		if q.Validate != nil {
+			if err := q.Validate(v, state); err != nil {
+				fmt.Printf("Invalid value: %v\n", err)
+				continue
+			}
+		}
+		return v, nil
+	}
+}
+
+func applyModeConfig(s *onboardState) error {
+	switch s.mode {
+	case "relay":
+		applyRelayConfig(s.cfg, s.answers)
+	case "keeper":
+		applyKeeperConfig(s.cfg, s.answers)
+	case "both":
+		applyKeeperConfig(s.cfg, s.answers)
+		applyRelayConfig(s.cfg, s.answers)
+	}
+
+	if s.mode == "both" {
+		// Keep both mode self-contained by default.
+		s.cfg.Relay.Token = strings.TrimSpace(s.answers["relay.token"])
+		if s.cfg.Relay.Token == "" {
+			s.cfg.Relay.Token = strings.TrimSpace(s.answers["keeper.token"])
+		}
+	}
+
+	if s.mode == "relay" && strings.EqualFold(strings.TrimSpace(s.answers["relay.platform"]), "wecom") && isDefaultCloudRelay(s.answers["relay.server_url"]) {
+		// Cloud relay for WeCom needs local WeCom credentials.
+		if strings.TrimSpace(s.answers["relay.wecom_corp_id"]) == "" ||
+			strings.TrimSpace(s.answers["relay.wecom_agent_id"]) == "" ||
+			strings.TrimSpace(s.answers["relay.wecom_secret"]) == "" ||
+			strings.TrimSpace(s.answers["relay.wecom_token"]) == "" ||
+			strings.TrimSpace(s.answers["relay.wecom_aes_key"]) == "" {
+			return errors.New("cloud relay with wecom requires relay.wecom_* fields")
+		}
+		s.cfg.Platforms.WeCom.CorpID = strings.TrimSpace(s.answers["relay.wecom_corp_id"])
+		s.cfg.Platforms.WeCom.AgentID = strings.TrimSpace(s.answers["relay.wecom_agent_id"])
+		s.cfg.Platforms.WeCom.Secret = strings.TrimSpace(s.answers["relay.wecom_secret"])
+		s.cfg.Platforms.WeCom.Token = strings.TrimSpace(s.answers["relay.wecom_token"])
+		s.cfg.Platforms.WeCom.AESKey = strings.TrimSpace(s.answers["relay.wecom_aes_key"])
+	}
+
+	// In both mode, reuse keeper WeCom credentials for relay convenience.
+	if s.mode == "both" {
+		s.cfg.Platforms.WeCom.CorpID = s.cfg.Keeper.WeComCorpID
+		s.cfg.Platforms.WeCom.AgentID = s.cfg.Keeper.WeComAgentID
+		s.cfg.Platforms.WeCom.Secret = s.cfg.Keeper.WeComSecret
+		s.cfg.Platforms.WeCom.Token = s.cfg.Keeper.WeComToken
+		s.cfg.Platforms.WeCom.AESKey = s.cfg.Keeper.WeComAESKey
+	}
+
+	return nil
+}
+
+func applyRelayConfig(cfg *config.Config, answers map[string]string) {
+	cfg.Mode = "relay"
+	cfg.Relay.Platform = strings.TrimSpace(answers["relay.platform"])
+	cfg.Relay.UserID = strings.TrimSpace(answers["relay.user_id"])
+	cfg.Relay.Token = strings.TrimSpace(answers["relay.token"])
+	cfg.Relay.ServerURL = strings.TrimSpace(answers["relay.server_url"])
+	cfg.Relay.WebhookURL = strings.TrimSpace(answers["relay.webhook_url"])
+	cfg.Relay.UseMediaProxy = parseBoolDefault(answers["relay.use_media_proxy"], cfg.Relay.UseMediaProxy)
+}
+
+func applyKeeperConfig(cfg *config.Config, answers map[string]string) {
+	cfg.Mode = "keeper"
+	cfg.Keeper.Port = parseIntDefault(answers["keeper.port"], 8080)
+	cfg.Keeper.Token = strings.TrimSpace(answers["keeper.token"])
+	cfg.Keeper.WeComCorpID = strings.TrimSpace(answers["keeper.wecom_corp_id"])
+	cfg.Keeper.WeComAgentID = strings.TrimSpace(answers["keeper.wecom_agent_id"])
+	cfg.Keeper.WeComSecret = strings.TrimSpace(answers["keeper.wecom_secret"])
+	cfg.Keeper.WeComToken = strings.TrimSpace(answers["keeper.wecom_token"])
+	cfg.Keeper.WeComAESKey = strings.TrimSpace(answers["keeper.wecom_aes_key"])
+}
+
+func writeAIRegistry(s *onboardState) error {
+	providerKey := strings.ToLower(strings.TrimSpace(s.answers["ai.provider"]))
+	template := providerTemplates[providerKey]
+
+	providerName := template.Name
+	providerType := template.Type
+	if providerKey == "custom" {
+		providerName = strings.TrimSpace(s.answers["ai.provider_name"])
+		providerType = strings.TrimSpace(s.answers["ai.provider_type"])
+	}
+
+	baseURL := strings.TrimSpace(s.answers["ai.base_url"])
+	apiKey := strings.TrimSpace(s.answers["ai.api_key"])
+	primaryCode := strings.TrimSpace(s.answers["ai.model.primary"])
+	fallbackCode := strings.TrimSpace(s.answers["ai.model.fallback"])
+
+	providersPath := ai.ProvidersPath()
+	if err := os.MkdirAll(filepath.Dir(providersPath), 0755); err != nil {
+		return fmt.Errorf("failed to create providers directory: %w", err)
+	}
+
+	pf := providersYAML{
+		Providers: []providerYAML{
+			{
+				Name:    providerName,
+				Type:    providerType,
+				BaseURL: baseURL,
+				APIKey:  apiKey,
+			},
+		},
+	}
+	pd, err := yaml.Marshal(pf)
+	if err != nil {
+		return fmt.Errorf("failed to marshal providers.yaml: %w", err)
+	}
+	if err := os.WriteFile(providersPath, pd, 0600); err != nil {
+		return fmt.Errorf("failed to write providers.yaml: %w", err)
+	}
+
+	primaryModel := buildModelYAML(primaryCode, providerName, template)
+	models := []modelYAML{primaryModel}
+	if fallbackCode != "" && fallbackCode != primaryCode {
+		models = append(models, buildModelYAML(fallbackCode, providerName, template))
+	}
+
+	mf := modelsYAML{Models: models}
+	md, err := yaml.Marshal(mf)
+	if err != nil {
+		return fmt.Errorf("failed to marshal models.yaml: %w", err)
+	}
+	if err := os.WriteFile(ai.ModelsPath(), md, 0644); err != nil {
+		return fmt.Errorf("failed to write models.yaml: %w", err)
+	}
+
+	return nil
+}
+
+func buildModelYAML(code, providerName string, template providerTemplate) modelYAML {
+	code = strings.TrimSpace(code)
+	mt := modelTemplate{
+		Code:      code,
+		Intellect: "excellent",
+		Speed:     "fast",
+		Cost:      "medium",
+		Skills:    []string{},
+	}
+
+	if strings.EqualFold(code, template.PrimaryModel.Code) {
+		mt = template.PrimaryModel
+	}
+
+	if template.FallbackModel != "" && strings.EqualFold(code, template.FallbackModel) {
+		mt.Code = template.FallbackModel
+	}
+
+	return modelYAML{
+		Name:      code,
+		Code:      mt.Code,
+		Provider:  providerName,
+		Intellect: mt.Intellect,
+		Speed:     mt.Speed,
+		Cost:      mt.Cost,
+		Skills:    mt.Skills,
+	}
+}
+
+func maybeInstallService(s *onboardState) error {
+	_, err := service.ServiceID(s.mode)
+	if err != nil {
+		fmt.Printf("Service setup skipped: %v\n", err)
+		return nil
+	}
+
+	install, err := askYesNo(s, "service.install", "Install as a long-running service? (yes/no)", true)
+	if err != nil {
+		return err
+	}
+	if !install {
+		return nil
+	}
+
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	if err := service.Install(execPath, s.mode); err != nil {
+		return fmt.Errorf("service install failed: %w", err)
+	}
+	fmt.Println("Service installed.")
+
+	startNow, err := askYesNo(s, "service.start", "Start service now? (yes/no)", true)
+	if err != nil {
+		return err
+	}
+	if !startNow {
+		return nil
+	}
+
+	if err := service.Start(s.mode); err != nil {
+		return fmt.Errorf("service start failed: %w", err)
+	}
+	fmt.Println("Service started.")
+
+	return nil
+}
+
+func askYesNo(s *onboardState, key, prompt string, defaultYes bool) (bool, error) {
+	q := onboardQuestion{
+		Key:      key,
+		Prompt:   prompt,
+		Required: true,
+		Default: func(_ *onboardState) string {
+			if defaultYes {
+				return "yes"
+			}
+			return "no"
+		},
+		Validate: validateBool,
+	}
+	v, err := askQuestion(s, q)
+	if err != nil {
+		return false, err
+	}
+	return parseBoolDefault(v, defaultYes), nil
+}
+
+func parseSetValues(raw []string) (map[string]string, error) {
+	out := make(map[string]string, len(raw))
+	for _, item := range raw {
+		parts := strings.SplitN(item, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid --set value %q, expected key=value", item)
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		if key == "" {
+			return nil, fmt.Errorf("invalid --set value %q, empty key", item)
+		}
+		out[key] = val
+	}
+	return out, nil
+}
+
+func onboardValue(key string, s *onboardState) string {
+	if s != nil {
+		if v, ok := s.prefill[key]; ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+
+	switch key {
+	case "ai.provider":
+		return "deepseek"
+	case "keeper.port":
+		if s != nil && s.cfg.Keeper.Port != 0 {
+			return strconv.Itoa(s.cfg.Keeper.Port)
+		}
+		return "8080"
+	case "keeper.token":
+		if s != nil && s.cfg.Keeper.Token != "" {
+			return s.cfg.Keeper.Token
+		}
+	case "keeper.wecom_corp_id":
+		if s != nil && s.cfg.Keeper.WeComCorpID != "" {
+			return s.cfg.Keeper.WeComCorpID
+		}
+	case "keeper.wecom_agent_id":
+		if s != nil && s.cfg.Keeper.WeComAgentID != "" {
+			return s.cfg.Keeper.WeComAgentID
+		}
+	case "keeper.wecom_secret":
+		if s != nil && s.cfg.Keeper.WeComSecret != "" {
+			return s.cfg.Keeper.WeComSecret
+		}
+	case "keeper.wecom_token":
+		if s != nil && s.cfg.Keeper.WeComToken != "" {
+			return s.cfg.Keeper.WeComToken
+		}
+	case "keeper.wecom_aes_key":
+		if s != nil && s.cfg.Keeper.WeComAESKey != "" {
+			return s.cfg.Keeper.WeComAESKey
+		}
+	case "relay.platform":
+		if s != nil && s.cfg.Relay.Platform != "" {
+			return s.cfg.Relay.Platform
+		}
+	case "relay.user_id":
+		if s != nil && s.cfg.Relay.UserID != "" {
+			return s.cfg.Relay.UserID
+		}
+	case "relay.token":
+		if s != nil && s.cfg.Relay.Token != "" {
+			return s.cfg.Relay.Token
+		}
+	case "relay.server_url":
+		if s != nil && s.cfg.Relay.ServerURL != "" {
+			return s.cfg.Relay.ServerURL
+		}
+		return config.DefaultConfig().Relay.ServerURL
+	case "relay.webhook_url":
+		if s != nil && s.cfg.Relay.WebhookURL != "" {
+			return s.cfg.Relay.WebhookURL
+		}
+		return config.DefaultConfig().Relay.WebhookURL
+	case "relay.use_media_proxy":
+		if s != nil {
+			if s.cfg.Relay.UseMediaProxy {
+				return "yes"
+			}
+			return "no"
+		}
 	}
 	return ""
 }
 
-func stepAIProvider(cfg *config.Config) {
-	fmt.Println("\n  Step 1/3: AI Provider")
-
-	options := make([]string, len(providers))
-	for i, p := range providers {
-		options[i] = p.label
+func defaultAIBaseURL(s *onboardState) string {
+	provider := strings.ToLower(strings.TrimSpace(s.answers["ai.provider"]))
+	if provider == "custom" {
+		return "https://api.example.com/v1"
 	}
+	if tpl, ok := providerTemplates[provider]; ok {
+		return tpl.DefaultBaseURL
+	}
+	return "https://api.deepseek.com/v1"
+}
 
-	defIdx := 0
-	for i, p := range providers {
-		if p.name == cfg.AI.Provider {
-			defIdx = i
-			break
+func defaultPrimaryModel(s *onboardState) string {
+	provider := strings.ToLower(strings.TrimSpace(s.answers["ai.provider"]))
+	if provider == "custom" {
+		return "custom-model"
+	}
+	if tpl, ok := providerTemplates[provider]; ok {
+		return tpl.PrimaryModel.Code
+	}
+	return "deepseek-chat"
+}
+
+func defaultFallbackModel(s *onboardState) string {
+	provider := strings.ToLower(strings.TrimSpace(s.answers["ai.provider"]))
+	if provider == "custom" {
+		return ""
+	}
+	if tpl, ok := providerTemplates[provider]; ok {
+		return tpl.FallbackModel
+	}
+	return ""
+}
+
+func defaultRelayUserID(s *onboardState) string {
+	if v := onboardValue("relay.user_id", s); v != "" {
+		return v
+	}
+	if strings.EqualFold(strings.TrimSpace(s.answers["relay.platform"]), "wecom") {
+		if corp := strings.TrimSpace(s.answers["keeper.wecom_corp_id"]); corp != "" {
+			return "wecom-" + corp
+		}
+		if corp := onboardValue("relay.wecom_corp_id", s); corp != "" {
+			return "wecom-" + corp
 		}
 	}
+	return "coco-user"
+}
 
-	idx := promptSelect("Select AI provider:", options, defIdx)
-	p := providers[idx]
-	cfg.AI.Provider = p.name
-
-	if p.name == "claude" {
-		// Auto-detect existing tokens to suggest as defaults
-		detectedOAuth := detectClaudeOAuthToken()
-		detectedAPIKey := detectClaudeAPIKey()
-
-		// If existing config or detected token is OAuth, default to Setup Token auth
-		defAuth := 0
-		if detectedOAuth != "" || strings.HasPrefix(cfg.AI.APIKey, "sk-ant-oat") {
-			defAuth = 1
-		}
-
-		authIdx := promptSelect("Auth method:", []string{
-			"API Key       (from console.anthropic.com)",
-			"Setup Token   (from 'claude setup-token', requires Claude subscription)",
-		}, defAuth)
-		if authIdx == 0 {
-			defKey := cfg.AI.APIKey
-			if defKey == "" && detectedAPIKey != "" {
-				defKey = detectedAPIKey
-				fmt.Printf("\n  Detected existing API key: %s\n", maskKey(defKey))
-			}
-			fmt.Printf("\n  Claude API Key (%s)\n", p.keyURL)
-			cfg.AI.APIKey = promptText("API Key", defKey)
-		} else {
-			// Pick best default: prefer detected (freshest), fall back to config
-			defToken := detectedOAuth
-			if defToken == "" {
-				defToken = cfg.AI.APIKey
-			}
-
-			if defToken != "" {
-				fmt.Printf("\n  Detected existing Claude token: %s\n", maskKey(defToken))
-				fmt.Println("  Press Enter to use it, or paste a different token.")
-			} else {
-				fmt.Println("\n  Run 'claude setup-token' in another terminal, then paste the token here.")
-				fmt.Println("  (Requires Claude Code CLI and an active Claude subscription)")
-			}
-			cfg.AI.APIKey = promptText("Setup Token (sk-ant-oat01-...)", defToken)
-			if cfg.AI.APIKey != "" && !strings.HasPrefix(cfg.AI.APIKey, "sk-ant-oat") {
-				fmt.Println("  Warning: expected token starting with sk-ant-oat01-")
-			}
-		}
-	} else {
-		displayName := strings.ToUpper(p.name[:1]) + p.name[1:]
-		fmt.Printf("\n  %s API Key (%s)\n", displayName, p.keyURL)
-		cfg.AI.APIKey = promptText("API Key", cfg.AI.APIKey)
+func defaultRelayToken(s *onboardState) string {
+	if v := onboardValue("relay.token", s); v != "" {
+		return v
 	}
-
-	model := promptText("Model", p.defModel)
-	cfg.AI.Model = model
-
-	fmt.Printf("\n  > AI provider configured: %s / %s\n", cfg.AI.Provider, cfg.AI.Model)
-}
-
-type platformInfo struct {
-	name  string
-	label string
-}
-
-var platformOptions = []platformInfo{
-	{"wecom", "wecom     (WeCom/企业微信)"},
-	{"wechat", "wechat    (WeChat/微信, relay only)"},
-	{"dingtalk", "dingtalk  (DingTalk/钉钉)"},
-	{"feishu", "feishu    (Feishu/Lark/飞书)"},
-	{"slack", "slack"},
-	{"telegram", "telegram"},
-	{"discord", "discord"},
-	{"whatsapp", "whatsapp  (WhatsApp Business)"},
-	{"line", "line      (LINE)"},
-	{"teams", "teams     (Microsoft Teams)"},
-	{"matrix", "matrix    (Matrix/Element)"},
-	{"googlechat", "googlechat (Google Chat)"},
-	{"mattermost", "mattermost (Mattermost)"},
-	{"imessage", "imessage  (iMessage/BlueBubbles)"},
-	{"signal", "signal    (Signal)"},
-	{"twitch", "twitch    (Twitch)"},
-	{"nostr", "nostr     (NOSTR)"},
-	{"zalo", "zalo      (Zalo)"},
-	{"nextcloud", "nextcloud (Nextcloud Talk)"},
-	{"skip", "skip      (configure later)"},
-}
-
-func stepPlatform(cfg *config.Config) {
-	fmt.Println("\n  Step 2/3: Platform")
-
-	options := make([]string, len(platformOptions))
-	for i, p := range platformOptions {
-		options[i] = p.label
+	if keeperToken := strings.TrimSpace(s.answers["keeper.token"]); keeperToken != "" {
+		return keeperToken
 	}
+	return ""
+}
 
-	idx := promptSelect("Select messaging platform:", options, 0)
-	platform := platformOptions[idx].name
+func defaultRelayServerURL(s *onboardState) string {
+	if s.mode == "both" {
+		port := parseIntDefault(s.answers["keeper.port"], 8080)
+		return fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
+	}
+	return onboardValue("relay.server_url", s)
+}
 
-	switch platform {
-	case "wecom":
-		stepWecom(cfg)
-	case "wechat":
-		stepWeChat(cfg)
-	case "dingtalk":
-		stepDingTalk(cfg)
-	case "feishu":
-		stepFeishu(cfg)
-	case "slack":
-		stepSlack(cfg)
-	case "telegram":
-		stepTelegram(cfg)
-	case "discord":
-		stepDiscord(cfg)
-	case "whatsapp":
-		stepWhatsApp(cfg)
-	case "line":
-		stepLINE(cfg)
-	case "teams":
-		stepTeams(cfg)
-	case "matrix":
-		stepMatrix(cfg)
-	case "googlechat":
-		stepGoogleChat(cfg)
-	case "mattermost":
-		stepMattermost(cfg)
-	case "imessage":
-		stepIMessage(cfg)
-	case "signal":
-		stepSignal(cfg)
-	case "twitch":
-		stepTwitch(cfg)
-	case "nostr":
-		stepNOSTR(cfg)
-	case "zalo":
-		stepZalo(cfg)
-	case "nextcloud":
-		stepNextcloud(cfg)
-	case "skip":
-		fmt.Println("\n  > Platform configuration skipped")
+func defaultRelayWebhookURL(s *onboardState) string {
+	if s.mode == "both" {
+		port := parseIntDefault(s.answers["keeper.port"], 8080)
+		return fmt.Sprintf("http://127.0.0.1:%d/webhook", port)
+	}
+	return onboardValue("relay.webhook_url", s)
+}
+
+func defaultUseMediaProxy(s *onboardState) string {
+	if s.mode == "both" {
+		return "no"
+	}
+	serverURL := strings.TrimSpace(s.answers["relay.server_url"])
+	if serverURL == "" {
+		serverURL = onboardValue("relay.server_url", s)
+	}
+	if isDefaultCloudRelay(serverURL) {
+		return "yes"
+	}
+	if onboardValue("relay.use_media_proxy", s) == "yes" {
+		return "yes"
+	}
+	return "no"
+}
+
+func defaultKeeperPort(s *onboardState) string {
+	return onboardValue("keeper.port", s)
+}
+
+func defaultKeeperToken(s *onboardState) string {
+	return onboardValue("keeper.token", s)
+}
+
+func defaultRelayWeComCorpID(s *onboardState) string {
+	if v := onboardValue("relay.wecom_corp_id", s); v != "" {
+		return v
+	}
+	return onboardValue("keeper.wecom_corp_id", s)
+}
+
+func validateModeValue(v string, _ *onboardState) error {
+	_, err := service.ValidateMode(v)
+	return err
+}
+
+func validateRelayPlatform(v string, _ *onboardState) error {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "wecom", "feishu", "slack", "wechat":
+		return nil
+	default:
+		return fmt.Errorf("unsupported relay platform %q", v)
 	}
 }
 
-func stepWecom(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.WeCom.CorpID = promptText("WeCom Corp ID", cfg.Platforms.WeCom.CorpID)
-	cfg.Platforms.WeCom.AgentID = promptText("WeCom Agent ID", cfg.Platforms.WeCom.AgentID)
-	cfg.Platforms.WeCom.Secret = promptText("WeCom Secret", cfg.Platforms.WeCom.Secret)
-	cfg.Platforms.WeCom.Token = promptText("WeCom Token", cfg.Platforms.WeCom.Token)
-	cfg.Platforms.WeCom.AESKey = promptText("WeCom AES Key (EncodingAESKey)", cfg.Platforms.WeCom.AESKey)
-	fmt.Println("\n  > WeCom configured")
-}
-
-func stepDingTalk(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.DingTalk.ClientID = promptText("DingTalk AppKey (ClientID)", cfg.Platforms.DingTalk.ClientID)
-	cfg.Platforms.DingTalk.ClientSecret = promptText("DingTalk AppSecret (ClientSecret)", cfg.Platforms.DingTalk.ClientSecret)
-	fmt.Println("\n  > DingTalk configured")
-}
-
-func stepFeishu(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.Feishu.AppID = promptText("Feishu App ID", cfg.Platforms.Feishu.AppID)
-	cfg.Platforms.Feishu.AppSecret = promptText("Feishu App Secret", cfg.Platforms.Feishu.AppSecret)
-	fmt.Println("\n  > Feishu configured")
-}
-
-func stepSlack(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.Slack.BotToken = promptText("Slack Bot Token (xoxb-...)", cfg.Platforms.Slack.BotToken)
-	cfg.Platforms.Slack.AppToken = promptText("Slack App Token (xapp-...)", cfg.Platforms.Slack.AppToken)
-	fmt.Println("\n  > Slack configured")
-}
-
-func stepTelegram(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.Telegram.Token = promptText("Telegram Bot Token", cfg.Platforms.Telegram.Token)
-	fmt.Println("\n  > Telegram configured")
-}
-
-func stepDiscord(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.Discord.Token = promptText("Discord Bot Token", cfg.Platforms.Discord.Token)
-	fmt.Println("\n  > Discord configured")
-}
-
-func stepWhatsApp(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.WhatsApp.PhoneNumberID = promptText("WhatsApp Phone Number ID", cfg.Platforms.WhatsApp.PhoneNumberID)
-	cfg.Platforms.WhatsApp.AccessToken = promptText("WhatsApp Access Token", cfg.Platforms.WhatsApp.AccessToken)
-	cfg.Platforms.WhatsApp.VerifyToken = promptText("WhatsApp Verify Token", cfg.Platforms.WhatsApp.VerifyToken)
-	fmt.Println("\n  > WhatsApp configured")
-}
-
-func stepLINE(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.LINE.ChannelSecret = promptText("LINE Channel Secret", cfg.Platforms.LINE.ChannelSecret)
-	cfg.Platforms.LINE.ChannelToken = promptText("LINE Channel Token", cfg.Platforms.LINE.ChannelToken)
-	fmt.Println("\n  > LINE configured")
-}
-
-func stepTeams(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.Teams.AppID = promptText("Teams App ID", cfg.Platforms.Teams.AppID)
-	cfg.Platforms.Teams.AppPassword = promptText("Teams App Password", cfg.Platforms.Teams.AppPassword)
-	cfg.Platforms.Teams.TenantID = promptText("Teams Tenant ID", cfg.Platforms.Teams.TenantID)
-	fmt.Println("\n  > Teams configured")
-}
-
-func stepMatrix(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.Matrix.HomeserverURL = promptText("Matrix Homeserver URL", cfg.Platforms.Matrix.HomeserverURL)
-	cfg.Platforms.Matrix.UserID = promptText("Matrix User ID (@bot:server)", cfg.Platforms.Matrix.UserID)
-	cfg.Platforms.Matrix.AccessToken = promptText("Matrix Access Token", cfg.Platforms.Matrix.AccessToken)
-	fmt.Println("\n  > Matrix configured")
-}
-
-func stepGoogleChat(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.GoogleChat.ProjectID = promptText("Google Chat Project ID", cfg.Platforms.GoogleChat.ProjectID)
-	cfg.Platforms.GoogleChat.CredentialsFile = promptText("Google Chat Credentials File", cfg.Platforms.GoogleChat.CredentialsFile)
-	fmt.Println("\n  > Google Chat configured")
-}
-
-func stepMattermost(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.Mattermost.ServerURL = promptText("Mattermost Server URL", cfg.Platforms.Mattermost.ServerURL)
-	cfg.Platforms.Mattermost.Token = promptText("Mattermost Token", cfg.Platforms.Mattermost.Token)
-	cfg.Platforms.Mattermost.TeamName = promptText("Mattermost Team Name", cfg.Platforms.Mattermost.TeamName)
-	fmt.Println("\n  > Mattermost configured")
-}
-
-func stepIMessage(cfg *config.Config) {
-	fmt.Println()
-	fmt.Println("  iMessage requires BlueBubbles server running on macOS.")
-	cfg.Platforms.IMessage.BlueBubblesURL = promptText("BlueBubbles Server URL", cfg.Platforms.IMessage.BlueBubblesURL)
-	cfg.Platforms.IMessage.BlueBubblesPassword = promptText("BlueBubbles Password", cfg.Platforms.IMessage.BlueBubblesPassword)
-	fmt.Println("\n  > iMessage configured")
-}
-
-func stepSignal(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.Signal.APIURL = promptText("Signal API URL (signal-cli REST)", cfg.Platforms.Signal.APIURL)
-	cfg.Platforms.Signal.PhoneNumber = promptText("Signal Phone Number", cfg.Platforms.Signal.PhoneNumber)
-	fmt.Println("\n  > Signal configured")
-}
-
-func stepTwitch(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.Twitch.Token = promptText("Twitch OAuth Token", cfg.Platforms.Twitch.Token)
-	cfg.Platforms.Twitch.Channel = promptText("Twitch Channel", cfg.Platforms.Twitch.Channel)
-	cfg.Platforms.Twitch.BotName = promptText("Twitch Bot Name", cfg.Platforms.Twitch.BotName)
-	fmt.Println("\n  > Twitch configured")
-}
-
-func stepNOSTR(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.NOSTR.PrivateKey = promptText("NOSTR Private Key (hex or nsec)", cfg.Platforms.NOSTR.PrivateKey)
-	cfg.Platforms.NOSTR.Relays = promptText("NOSTR Relay URLs (comma-separated)", cfg.Platforms.NOSTR.Relays)
-	fmt.Println("\n  > NOSTR configured")
-}
-
-func stepZalo(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.Zalo.AppID = promptText("Zalo App ID", cfg.Platforms.Zalo.AppID)
-	cfg.Platforms.Zalo.SecretKey = promptText("Zalo Secret Key", cfg.Platforms.Zalo.SecretKey)
-	cfg.Platforms.Zalo.AccessToken = promptText("Zalo Access Token", cfg.Platforms.Zalo.AccessToken)
-	fmt.Println("\n  > Zalo configured")
-}
-
-func stepNextcloud(cfg *config.Config) {
-	fmt.Println()
-	cfg.Platforms.Nextcloud.ServerURL = promptText("Nextcloud Server URL", cfg.Platforms.Nextcloud.ServerURL)
-	cfg.Platforms.Nextcloud.Username = promptText("Nextcloud Username", cfg.Platforms.Nextcloud.Username)
-	cfg.Platforms.Nextcloud.Password = promptText("Nextcloud Password", cfg.Platforms.Nextcloud.Password)
-	cfg.Platforms.Nextcloud.RoomToken = promptText("Nextcloud Talk Room Token", cfg.Platforms.Nextcloud.RoomToken)
-	fmt.Println("\n  > Nextcloud Talk configured")
-}
-
-func stepWeChat(cfg *config.Config) {
-	fmt.Println()
-	fmt.Println("  WeChat works via the cloud relay service.")
-	fmt.Println("  1. Follow the official coco on WeChat")
-	fmt.Println("  2. Send /whoami to get your user ID")
-	fmt.Println("  3. Enter the user ID below")
-	fmt.Println()
-	cfg.Relay.UserID = promptText("WeChat User ID (from /whoami)", cfg.Relay.UserID)
-	cfg.Relay.Platform = "wechat"
-	cfg.Mode = "relay"
-	fmt.Println("\n  > WeChat configured (relay mode auto-selected)")
-}
-
-func stepConnectionMode(cfg *config.Config) {
-	fmt.Println("\n  Step 3/3: Connection Mode")
-
-	// If mode was already set by platform (e.g., wechat forces relay), skip
-	if cfg.Mode == "relay" && cfg.Relay.Platform != "" {
-		fmt.Printf("\n  > Connection mode: relay (set by platform)\n")
-		return
+func validateWSURL(v string, _ *onboardState) error {
+	u, err := url.Parse(strings.TrimSpace(v))
+	if err != nil {
+		return err
 	}
-
-	defIdx := 0
-	if cfg.Mode == "router" {
-		defIdx = 1
+	if u.Scheme != "ws" && u.Scheme != "wss" {
+		return fmt.Errorf("scheme must be ws or wss")
 	}
-
-	idx := promptSelect("Select connection mode:", []string{
-		"relay   (cloud relay, recommended, no public server needed)",
-		"router  (self-hosted, requires public IP)",
-	}, defIdx)
-
-	if idx == 0 {
-		cfg.Mode = "relay"
-		stepRelayConfig(cfg)
-	} else {
-		cfg.Mode = "router"
+	if u.Host == "" {
+		return fmt.Errorf("host is required")
 	}
-
-	fmt.Printf("\n  > Connection mode: %s\n", cfg.Mode)
+	return nil
 }
 
-// stepRelayConfig prompts for relay-specific settings when relay mode is selected.
-func stepRelayConfig(cfg *config.Config) {
-	// If relay platform already set (e.g., wechat), skip
-	if cfg.Relay.Platform != "" {
-		return
+func validateHTTPURL(v string, _ *onboardState) error {
+	u, err := url.Parse(strings.TrimSpace(v))
+	if err != nil {
+		return err
 	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("scheme must be http or https")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("host is required")
+	}
+	return nil
+}
 
-	// Determine relay platform from configured platform credentials
-	relayPlatforms := []string{}
-	if cfg.Platforms.Feishu.AppID != "" {
-		relayPlatforms = append(relayPlatforms, "feishu")
+func validatePort(v string, _ *onboardState) error {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return fmt.Errorf("must be a number")
 	}
-	if cfg.Platforms.Slack.BotToken != "" {
-		relayPlatforms = append(relayPlatforms, "slack")
+	if n < 1 || n > 65535 {
+		return fmt.Errorf("must be between 1 and 65535")
 	}
-	if cfg.Platforms.WeCom.CorpID != "" {
-		relayPlatforms = append(relayPlatforms, "wecom")
-	}
+	return nil
+}
 
-	// For feishu/slack relay, prompt for user ID
-	if len(relayPlatforms) == 1 {
-		cfg.Relay.Platform = relayPlatforms[0]
+func validateAESKey(v string, _ *onboardState) error {
+	if len(strings.TrimSpace(v)) != 43 {
+		return fmt.Errorf("must be 43 characters")
 	}
+	return nil
+}
 
-	if cfg.Relay.Platform == "feishu" || cfg.Relay.Platform == "slack" {
-		fmt.Println()
-		fmt.Println("  Relay mode requires a user ID from the official bot.")
-		fmt.Println("  Send /whoami to the bot to get your user ID.")
-		cfg.Relay.UserID = promptText("Relay User ID (from /whoami, or leave empty)", cfg.Relay.UserID)
+func validateBool(v string, _ *onboardState) error {
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch v {
+	case "y", "yes", "n", "no", "true", "false", "1", "0":
+		return nil
+	default:
+		return fmt.Errorf("expected yes/no")
 	}
 }
 
-func stepEmbeddingConfig(cfg *config.Config) {
-	fmt.Println("\n  Step 2/5: Memory System (optional)")
-	fmt.Println("  Memory system uses RAG to remember conversations and user preferences.")
-
-	idx := promptSelect("Would you like to enable the memory system?", []string{
-		"Yes, enable memory system",
-		"No, skip memory configuration",
-	}, 1)
-
-	if idx == 1 {
-		cfg.Embedding.Enabled = false
-		fmt.Println("\n  > Memory configuration skipped")
-		return
+func parseBoolDefault(v string, defaultValue bool) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "y", "yes", "true", "1":
+		return true
+	case "n", "no", "false", "0":
+		return false
+	default:
+		return defaultValue
 	}
-
-	cfg.Embedding.Enabled = true
-
-	fmt.Println("\n  Configure Embedding Provider")
-	embeddingOptions := []string{
-		"qwen    (Tongyi Qianwen, recommended for Chinese)",
-		"openai  (OpenAI, for English)",
-	}
-	defIdx := 0
-	if cfg.Embedding.Provider == "openai" {
-		defIdx = 1
-	}
-	embIdx := promptSelect("Select embedding provider:", embeddingOptions, defIdx)
-	if embIdx == 0 {
-		cfg.Embedding.Provider = "qwen"
-	} else {
-		cfg.Embedding.Provider = "openai"
-	}
-
-	fmt.Println()
-	defKey := cfg.Embedding.APIKey
-	if defKey == "" {
-		defKey = cfg.AI.APIKey
-	}
-	if cfg.Embedding.Provider == "qwen" {
-		fmt.Println("  Qwen Embedding uses the same API key as Qwen chat by default.")
-	} else {
-		fmt.Println("  OpenAI Embedding uses the same API key as OpenAI chat by default.")
-	}
-	cfg.Embedding.APIKey = promptText("Embedding API Key (leave empty to use chat API key)", defKey)
-
-	defModel := cfg.Embedding.Model
-	if defModel == "" {
-		if cfg.Embedding.Provider == "qwen" {
-			defModel = "text-embedding-v3"
-		} else {
-			defModel = "text-embedding-3-small"
-		}
-	}
-	cfg.Embedding.Model = promptText("Embedding Model", defModel)
-
-	defBaseURL := cfg.Embedding.BaseURL
-	if defBaseURL == "" {
-		defBaseURL = cfg.AI.BaseURL
-	}
-	cfg.Embedding.BaseURL = promptText("Embedding Base URL (leave empty to use chat base URL)", defBaseURL)
-
-	fmt.Printf("\n  > Memory system configured: %s / %s\n", cfg.Embedding.Provider, cfg.Embedding.Model)
 }
 
-func stepSearchConfig(cfg *config.Config) {
-	fmt.Println("\n  Step 5/5: Search Engines (optional)")
-
-	idx := promptSelect("Would you like to configure search engines?", []string{
-		"Yes, configure search engines",
-		"No, skip search configuration",
-	}, 0)
-
-	if idx == 1 {
-		fmt.Println("\n  > Search configuration skipped")
-		return
+func parseIntDefault(v string, defaultValue int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return defaultValue
 	}
-
-	fmt.Println("\n  Configure Metaso (秘塔搜索) - Chinese search engine")
-	metasoAPIKey := ""
-	for _, e := range cfg.Search.Engines {
-		if e.Name == "metaso" {
-			metasoAPIKey = e.APIKey
-		}
-	}
-	metasoAPIKey = promptText("Metaso API Key (leave empty to skip)", metasoAPIKey)
-	if metasoAPIKey != "" {
-		for i := range cfg.Search.Engines {
-			if cfg.Search.Engines[i].Name == "metaso" {
-				cfg.Search.Engines[i].APIKey = metasoAPIKey
-			}
-		}
-	}
-
-	fmt.Println("\n  Configure Tavily - Global search engine")
-	tavilyAPIKey := ""
-	for _, e := range cfg.Search.Engines {
-		if e.Name == "tavily" {
-			tavilyAPIKey = e.APIKey
-		}
-	}
-	tavilyAPIKey = promptText("Tavily API Key (leave empty to skip)", tavilyAPIKey)
-	if tavilyAPIKey != "" {
-		for i := range cfg.Search.Engines {
-			if cfg.Search.Engines[i].Name == "tavily" {
-				cfg.Search.Engines[i].APIKey = tavilyAPIKey
-			}
-		}
-	}
-
-	if metasoAPIKey != "" || tavilyAPIKey != "" {
-		engineOptions := []string{}
-		if metasoAPIKey != "" {
-			engineOptions = append(engineOptions, "metaso     (秘塔搜索, Chinese)")
-		}
-		if tavilyAPIKey != "" {
-			engineOptions = append(engineOptions, "tavily     (Global search)")
-		}
-
-		if len(engineOptions) > 1 {
-			fmt.Println()
-			defIdx := 0
-			if cfg.Search.PrimaryEngine == "tavily" && tavilyAPIKey != "" {
-				defIdx = 1
-			}
-			primaryIdx := promptSelect("Select primary search engine:", engineOptions, defIdx)
-			if primaryIdx == 0 && metasoAPIKey != "" {
-				cfg.Search.PrimaryEngine = "metaso"
-			} else if primaryIdx == 1 && tavilyAPIKey != "" {
-				cfg.Search.PrimaryEngine = "tavily"
-			}
-		}
-
-		fmt.Println()
-		autoSearchIdx := promptSelect("Enable automatic search for uncertain queries?", []string{
-			"Yes, auto-search when needed",
-			"No, only search when explicitly asked",
-		}, 0)
-		cfg.Search.AutoSearch = autoSearchIdx == 0
-	}
-
-	fmt.Println()
-	customIdx := promptSelect("Would you like to add a custom search engine?", []string{
-		"No, skip custom engine",
-		"Yes, add a custom search engine",
-	}, 0)
-
-	if customIdx == 1 {
-		fmt.Println()
-		customName := promptText("Custom engine name", "")
-		if customName != "" {
-			customType := promptText("Engine type (custom_http)", "custom_http")
-			customBaseURL := promptText("Base URL (API endpoint)", "")
-			customAPIKey := promptText("API Key (leave empty if not needed)", "")
-
-			customEngine := config.SearchEngineConfig{
-				Name:     customName,
-				Type:     customType,
-				APIKey:   customAPIKey,
-				BaseURL:  customBaseURL,
-				Enabled:  true,
-				Priority: len(cfg.Search.Engines) + 1,
-			}
-			cfg.Search.Engines = append(cfg.Search.Engines, customEngine)
-			fmt.Printf("\n  > Custom search engine '%s' added\n", customName)
-		}
-	}
-
-	fmt.Println("\n  > Search configuration complete")
+	return n
 }
 
-func printOnboardSummary(cfg *config.Config) {
-	fmt.Println()
-	fmt.Println("  ───────────────────────────────────")
-	fmt.Printf("  > Configuration saved to %s\n", config.ConfigPath())
-	fmt.Println()
-
-	// Embedding configuration summary
-	if cfg.Embedding.Enabled {
-		fmt.Println("  Memory system enabled:")
-		fmt.Printf("    - Provider: %s\n", cfg.Embedding.Provider)
-		fmt.Printf("    - Model: %s\n", cfg.Embedding.Model)
-		if cfg.Embedding.APIKey != "" {
-			fmt.Printf("    - API Key: %s\n", maskKey(cfg.Embedding.APIKey))
-		}
-		fmt.Println()
-	}
-
-	// Search configuration summary
-	hasSearch := false
-	for _, e := range cfg.Search.Engines {
-		if e.APIKey != "" && e.Enabled {
-			hasSearch = true
-			break
-		}
-	}
-
-	if hasSearch {
-		fmt.Println("  Search engines configured:")
-		for _, e := range cfg.Search.Engines {
-			if e.APIKey != "" && e.Enabled {
-				engineLabel := e.Name
-				if cfg.Search.PrimaryEngine == e.Name {
-					engineLabel += " [primary]"
-				}
-				fmt.Printf("    - %s (API Key: %s)\n", engineLabel, maskKey(e.APIKey))
-			}
-		}
-		if cfg.Search.AutoSearch {
-			fmt.Println("    Auto-search: enabled")
-		} else {
-			fmt.Println("    Auto-search: disabled")
-		}
-		fmt.Println()
-	}
-
-	if cfg.Mode == "relay" {
-		if cfg.Relay.UserID != "" && cfg.Relay.Platform != "" {
-			fmt.Println("  To start the bot, run:")
-			fmt.Println("    coco relay")
-		} else if cfg.Relay.Platform == "wecom" {
-			fmt.Println("  To start the bot, run:")
-			fmt.Println("    coco relay --platform wecom")
-		} else {
-			fmt.Println("  To start the bot, run:")
-			fmt.Println("    coco relay --platform <platform> --user-id <your-id>")
-			fmt.Println()
-			fmt.Println("  Get your user ID by sending /whoami to the official bot.")
-		}
-	} else {
-		fmt.Println("  To start the bot, run:")
-		fmt.Println("    coco router")
-	}
-	fmt.Println()
-	fmt.Println("  To reconfigure:")
-	fmt.Println("    coco onboard")
-	fmt.Println()
+func isDefaultCloudRelay(serverURL string) bool {
+	u := strings.TrimSpace(serverURL)
+	return u == "" || strings.EqualFold(u, "wss://keeper.kayz.com/ws")
 }

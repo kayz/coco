@@ -169,30 +169,46 @@ coco.exe --onboard    # 首次运行引导配置
 
 ## 四、核心能力规划
 
-### 4.1 多模型路由
+### 4.1 多模型路由（Phase 1 目标方案）
+
+**配置分层：**
+- `providers.yaml`：仅本地，含 API URL + API Key（每个 provider 一个 key）
+- `models.yaml`：可公开，描述模型能力/费用/速度/智力分档
+- 运行期路由（应用级）在主配置中维护：每个应用都有独立的“可用模型列表”
+
+**配置示例：**
 
 ```yaml
-# 配置示例
-ai:
-  providers:
-    - name: claude-sonnet
-      type: anthropic
-      capabilities: [multimodal, thinking, fast]
-      cost_per_1m_input: 3.0
-      cost_per_1m_output: 15.0
-    - name: deepseek-r1
-      type: deepseek
-      capabilities: [thinking]
-      cost_per_1m_input: 0.55
-      cost_per_1m_output: 2.19
-    - name: qwen-vl
-      type: qwen
-      capabilities: [multimodal, ocr]
-      cost_per_1m_input: 0.8
-      cost_per_1m_output: 0.8
+# providers.yaml（本地，不进 Git）
+providers:
+  - name: openai
+    type: openai
+    base_url: "https://api.openai.com/v1"
+    api_key: "${OPENAI_API_KEY}"
+  - name: openai-codex
+    type: openai
+    base_url: "https://api.openai.com/v1"
+    api_key: "${OPENAI_CODEX_API_KEY}"
+
+# models.yaml（可公开）
+models:
+  - name: gpt-4o
+    code: gpt-4o
+    provider: openai
+    intellect: full        # 满分 / 优秀 / 良好 / 可用
+    speed: fast            # 快 / 中 / 慢
+    cost: high             # 贵 / 高 / 中 / 低 / 免费
+    skills: [multimodal, thinking]
 ```
 
-coco 在系统提示中知晓所有模型的能力和费用，可通过工具调用动态切换。
+**路由原则：**
+- 按应用维度维护可用模型列表（coco/keeper/agent/cron/心跳各自独立）
+- failover 只在该应用列表内进行，优先同一智力等级，必要时再降档
+- cron/心跳必须使用 `speed: fast` 的模型
+- 大量 token 场景：先小模型拉取/规范，再交给高智力模型解读
+- 特殊能力（文生图/视频等）由 agent 指定模型
+
+coco 在系统提示中知晓可用模型清单，通过工具调用切换模型。
 
 ### 4.2 外部 Agent 应用
 

@@ -89,7 +89,7 @@ func WebFetch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-	req2.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LingtiBot/1.0)")
+	req2.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Coco/1.0)")
 
 	resp, err := client.Do(req2)
 	if err != nil {

@@ -94,7 +94,7 @@ func (e *MetasoEngine) Search(ctx context.Context, query string, limit int) (*Se
 	if e.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+e.apiKey)
 	}
-	req.Header.Set("User-Agent", "LingtiBot/1.0")
+	req.Header.Set("User-Agent", "Coco/1.0")
 
 	resp, err := e.client.Do(req)
 	if err != nil {

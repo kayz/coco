@@ -22,7 +22,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var keeperPort int
+var (
+	keeperPort          int
+	keeperServiceAction string
+)
 
 var keeperCmd = &cobra.Command{
 	Use:   "keeper",
@@ -42,6 +45,7 @@ Usage:
 func init() {
 	rootCmd.AddCommand(keeperCmd)
 	keeperCmd.Flags().IntVar(&keeperPort, "port", 0, "Server port (default: from config or 8080)")
+	keeperCmd.Flags().StringVar(&keeperServiceAction, "service", "", serviceActionHelp)
 }
 
 // cocoClient represents a connected coco instance.
@@ -55,14 +59,14 @@ type cocoClient struct {
 
 // keeperServer holds all Keeper state.
 type keeperServer struct {
-	cfg       *config.Config
-	msgCrypt  *wecom.MsgCrypt
-	wecom     *wecom.Platform
-	upgrader  websocket.Upgrader
-	client    *cocoClient // single coco connection (Phase 0)
-	clientMu  sync.RWMutex
-	ctx       context.Context
-	cancel    context.CancelFunc
+	cfg      *config.Config
+	msgCrypt *wecom.MsgCrypt
+	wecom    *wecom.Platform
+	upgrader websocket.Upgrader
+	client   *cocoClient // single coco connection (Phase 0)
+	clientMu sync.RWMutex
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 func newKeeperServer(cfg *config.Config) (*keeperServer, error) {
@@ -461,6 +465,10 @@ func (s *keeperServer) handleWebhook(w http.ResponseWriter, r *http.Request) {
 // ---------- Main entry ----------
 
 func runKeeper(cmd *cobra.Command, args []string) {
+	if runModeServiceAction("keeper", keeperServiceAction) {
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)

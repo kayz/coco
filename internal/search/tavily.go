@@ -88,7 +88,7 @@ func (e *TavilyEngine) Search(ctx context.Context, query string, limit int) (*Se
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "LingtiBot/1.0")
+	req.Header.Set("User-Agent", "Coco/1.0")
 
 	resp, err := e.client.Do(req)
 	if err != nil {

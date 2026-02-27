@@ -256,7 +256,7 @@ func loadSkillsFromDir(dir string, source SkillSource, disabled map[string]bool,
 // resolveBundledSkillsDir finds the bundled skills directory relative to the executable.
 func resolveBundledSkillsDir() string {
 	// Check environment variable override
-	if dir := os.Getenv("LINGTI_BUNDLED_SKILLS_DIR"); dir != "" {
+	if dir := os.Getenv("COCO_BUNDLED_SKILLS_DIR"); dir != "" {
 		if looksLikeSkillsDir(dir) {
 			return dir
 		}

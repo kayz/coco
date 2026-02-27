@@ -425,3 +425,17 @@ Phase 0 完成，当且仅当：
 *计划制定：2026-02-25*
 *完成确认：2026-02-26*
 *涉及文件：`cmd/keeper.go`（新建）、`cmd/relay-server.go`（删除）、`internal/config/config.go`、`docs/keeper-setup.md` 等*
+
+---
+
+# Phase 1 方案文档：多模型路由（最佳方案）
+
+> 本文档仅作为 Phase 0 计划收尾后的 Phase 1 入口。
+> Phase 1 的完整方案与配置规范见：
+>
+> - `docs/phase1-model-routing.md`
+
+**说明**
+- Phase 1 采用“最佳方案”设计，不受现有架构限制
+- Provider 与 Model 分文件管理
+- failover 只在应用自己的模型池内进行

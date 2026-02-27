@@ -17,7 +17,7 @@ func init() {
 		Enabled = true
 	}
 	// Enable debug via environment variable (overrides ldflags)
-	if os.Getenv("LINGTI_DEBUG") == "1" {
+	if os.Getenv("COCO_DEBUG") == "1" {
 		Enabled = true
 	}
 	// Log startup message if debug is enabled

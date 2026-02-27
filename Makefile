@@ -1,10 +1,11 @@
-VERSION := 1.5.0
+VERSION := 1.10.0
 BUILD := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 PROJECTNAME := lingti-bot
 GOBASE := $(shell pwd)
 GOBIN := $(GOBASE)/dist
 GOARCH ?= $(shell go env GOARCH)
 GOOS ?= $(shell go env GOOS)
+MODE ?= relay
 LDFLAGS=-ldflags "-X github.com/pltanton/lingti-bot/internal/mcp.ServerVersion=$(VERSION) -X main.Build=$(BUILD) -w -s"
 LDFLAGS_DEBUG=-ldflags "-X github.com/pltanton/lingti-bot/internal/mcp.ServerVersion=$(VERSION) -X main.Build=$(BUILD) -X github.com/pltanton/lingti-bot/internal/debug.enabled=true"
 GOBUILD=go build $(LDFLAGS)
@@ -62,24 +63,24 @@ codesign:
 # Install as system service
 install: build
 	@echo "Installing $(PROJECTNAME)..."
-	$(GOBIN)/$(PROJECTNAME) service install
+	$(GOBIN)/$(PROJECTNAME) $(MODE) --service install
 
 # Uninstall system service
 uninstall:
 	@echo "Uninstalling $(PROJECTNAME)..."
-	$(GOBIN)/$(PROJECTNAME) service uninstall
+	$(GOBIN)/$(PROJECTNAME) $(MODE) --service uninstall
 
 # Start service
 start:
-	$(GOBIN)/$(PROJECTNAME) service start
+	$(GOBIN)/$(PROJECTNAME) $(MODE) --service start
 
 # Stop service
 stop:
-	$(GOBIN)/$(PROJECTNAME) service stop
+	$(GOBIN)/$(PROJECTNAME) $(MODE) --service stop
 
 # Service status
 status:
-	$(GOBIN)/$(PROJECTNAME) service status
+	$(GOBIN)/$(PROJECTNAME) $(MODE) --service status
 
 # Run tests
 test:
@@ -100,7 +101,7 @@ lint:
 
 # Run locally (for development)
 run:
-	go run . serve
+	go run . relay
 
 # Show version
 version:
