@@ -19,11 +19,17 @@ prompt_build:
   root_dir: "."
   sqlite_path: ".coco.db"
   templates_dir: "prompts"
+  audit_enabled: true
+  audit_dir: ".coco/promptbuild-audit"
+  audit_retention_days: 7
+  audit_file_prefix: "promptbuild"
 ```
 
 - 模板路径相对 `templates_dir`
 - 参考文档路径相对 `root_dir`
 - SQLite 路径相对 `root_dir`
+- 审计日志按天写入 `audit_dir/{audit_file_prefix}-YYYY-MM-DD.jsonl`
+- 每次组装后自动清理超过 `audit_retention_days` 的旧日志
 
 ## 主要类型
 
@@ -45,14 +51,19 @@ type BuildRequest struct {
     References   []string
     History      HistorySpec
     UserInput    string
+    Agent        string
+    SpecPath     string
+    Inputs       map[string]string
     MaxHistory   int
     IncludeSectionHeaders *bool
 }
 ```
 
-## 组装顺序
+## 组装模式
 
-固定顺序拼装（空内容会跳过）：
+### 1) 兼容模式（默认）
+
+当 `BuildRequest` 未指定 `agent/spec_path` 时，沿用固定顺序拼装（空内容自动跳过）：
 
 1. System
 2. Task
@@ -62,6 +73,38 @@ type BuildRequest struct {
 6. References
 7. Chat History
 8. User Input
+
+### 2) Spec 配置模式
+
+当请求指定 `Agent` 或 `SpecPath` 时，加载 YAML 组装配置，按 `order` 渲染 `sections`，并在 `required=true` 且内容为空时返回错误。
+
+- `Agent`: 默认尝试加载 `prompts/specs/<agent>.yaml`
+- `SpecPath`: 显式配置文件路径（相对 `root_dir` 或绝对路径）
+
+`source_type` 支持：
+
+- `templates`
+- `request_field`
+- `references`
+- `history`
+- `user_input`
+- `inline_text`
+
+完整样例见：`docs/promptbuild-agent-spec.example.yaml`
+
+## 审计日志
+
+每次 `Build()` 完成后会写入一条 JSONL 审计记录（失败仅 warn，不影响主流程返回）。
+
+记录字段：
+
+- `timestamp`
+- `request_digest`（请求摘要哈希，避免原始大体积/敏感输入）
+- `final_prompt`
+- `sections`（最终参与拼装的 section 标题列表）
+- `history_meta`
+
+文件名规则：`{audit_file_prefix}-YYYY-MM-DD.jsonl`
 
 ## Chat History 读取规则
 
@@ -109,17 +152,18 @@ cfg, _ := config.Load()
 builder := promptbuild.NewBuilder(cfg.PromptBuild)
 
 out, err := builder.Build(promptbuild.BuildRequest{
-    System:    []string{"system/writer_role.md"},
-    Task:      []string{"task/summarize_doc.md"},
-    Format:    []string{"format/doc_template.md"},
-    Style:     []string{"style/formal.md"},
-    References: []string{"references/ref_doc_001.md"},
+    Agent:    "daily_research_analyst", // 将尝试加载 prompts/specs/daily_research_analyst.yaml
+    Inputs: map[string]string{
+        "analysis_instruction": "先给三行结论，再给证据与风险。",
+    },
+    Requirements: "生成今日策略简报",
+    References:   []string{"references/research_digest.md"},
     History: promptbuild.HistorySpec{
         Platform:  "wechat",
         ChannelID: "xxx",
         UserID:    "yyy",
-        Limit:     200,
+        Limit:     120,
     },
-    UserInput: "把刚刚的聊天整理成一篇文档。",
+    UserInput: "把今天重点变化写清楚",
 })
 ```

@@ -31,41 +31,43 @@ func getExecutableDir() string {
 }
 
 type Config struct {
-	Transport string          `yaml:"transport"` // "stdio" or "sse"
-	Port      int             `yaml:"port"`
-	Security  SecurityConfig  `yaml:"security"`
-	Logging   LoggingConfig   `yaml:"logging"`
-	AI        AIConfig        `yaml:"ai,omitempty"`
-	Embedding EmbeddingConfig `yaml:"embedding,omitempty"`
-	Platforms PlatformConfig  `yaml:"platforms,omitempty"`
-	Mode      string          `yaml:"mode,omitempty"` // "relay" or "router"
-	Relay     RelayConfig     `yaml:"relay,omitempty"`
-	Skills    SkillsConfig    `yaml:"skills,omitempty"`
-	Browser   BrowserConfig   `yaml:"browser,omitempty"`
-	Search    SearchConfig    `yaml:"search,omitempty"`
-	Keeper    KeeperConfig    `yaml:"keeper,omitempty"`
+	Transport     string            `yaml:"transport"` // "stdio" or "sse"
+	Port          int               `yaml:"port"`
+	Security      SecurityConfig    `yaml:"security"`
+	Logging       LoggingConfig     `yaml:"logging"`
+	AI            AIConfig          `yaml:"ai,omitempty"`
+	Embedding     EmbeddingConfig   `yaml:"embedding,omitempty"`
+	Platforms     PlatformConfig    `yaml:"platforms,omitempty"`
+	Mode          string            `yaml:"mode,omitempty"` // "relay" or "router"
+	Relay         RelayConfig       `yaml:"relay,omitempty"`
+	Skills        SkillsConfig      `yaml:"skills,omitempty"`
+	Browser       BrowserConfig     `yaml:"browser,omitempty"`
+	Search        SearchConfig      `yaml:"search,omitempty"`
+	Keeper        KeeperConfig      `yaml:"keeper,omitempty"`
+	PromptBuild   PromptBuildConfig `yaml:"prompt_build,omitempty"`
+	ModelCooldown string            `yaml:"model_cooldown,omitempty"`
 }
 
 // KeeperConfig holds configuration for Keeper mode (public server).
 type KeeperConfig struct {
-	Port         int    `yaml:"port,omitempty"`           // HTTP listen port, default 8080
-	Token        string `yaml:"token,omitempty"`          // Auth token for coco connections
+	Port         int    `yaml:"port,omitempty"`  // HTTP listen port, default 8080
+	Token        string `yaml:"token,omitempty"` // Auth token for coco connections
 	WeComCorpID  string `yaml:"wecom_corp_id,omitempty"`
 	WeComAgentID string `yaml:"wecom_agent_id,omitempty"`
 	WeComSecret  string `yaml:"wecom_secret,omitempty"`
-	WeComToken   string `yaml:"wecom_token,omitempty"`    // WeCom callback verification token
-	WeComAESKey  string `yaml:"wecom_aes_key,omitempty"`  // WeCom callback EncodingAESKey
+	WeComToken   string `yaml:"wecom_token,omitempty"`   // WeCom callback verification token
+	WeComAESKey  string `yaml:"wecom_aes_key,omitempty"` // WeCom callback EncodingAESKey
 }
 
 // SearchEngineConfig 单个搜索引擎配置
 type SearchEngineConfig struct {
-	Name       string                 `yaml:"name"`
-	Type       string                 `yaml:"type"`
-	APIKey     string                 `yaml:"api_key,omitempty"`
-	BaseURL    string                 `yaml:"base_url,omitempty"`
-	Enabled    bool                   `yaml:"enabled"`
-	Priority   int                    `yaml:"priority"`
-	Options    map[string]interface{} `yaml:"options,omitempty"`
+	Name     string                 `yaml:"name"`
+	Type     string                 `yaml:"type"`
+	APIKey   string                 `yaml:"api_key,omitempty"`
+	BaseURL  string                 `yaml:"base_url,omitempty"`
+	Enabled  bool                   `yaml:"enabled"`
+	Priority int                    `yaml:"priority"`
+	Options  map[string]interface{} `yaml:"options,omitempty"`
 }
 
 // SearchConfig 搜索引擎整体配置
@@ -86,10 +88,10 @@ type BrowserConfig struct {
 
 type RelayConfig struct {
 	UserID        string `yaml:"user_id,omitempty"`
-	Platform      string `yaml:"platform,omitempty"` // "feishu", "slack", "wechat", "wecom"
-	Token         string `yaml:"token,omitempty"`    // Auth token for Keeper connection
-	ServerURL     string `yaml:"server_url,omitempty"` // Custom relay server WebSocket URL
-	WebhookURL    string `yaml:"webhook_url,omitempty"` // Custom relay server webhook URL
+	Platform      string `yaml:"platform,omitempty"`        // "feishu", "slack", "wechat", "wecom"
+	Token         string `yaml:"token,omitempty"`           // Auth token for Keeper connection
+	ServerURL     string `yaml:"server_url,omitempty"`      // Custom relay server WebSocket URL
+	WebhookURL    string `yaml:"webhook_url,omitempty"`     // Custom relay server webhook URL
 	UseMediaProxy bool   `yaml:"use_media_proxy,omitempty"` // Proxy media download/upload through relay server
 }
 
@@ -105,11 +107,11 @@ func SkillsDir() string {
 }
 
 type AIConfig struct {
-	Provider string          `yaml:"provider,omitempty"`
-	APIKey   string          `yaml:"api_key,omitempty"`
-	BaseURL  string          `yaml:"base_url,omitempty"`
-	Model    string          `yaml:"model,omitempty"`
-	Models   []ModelConfig   `yaml:"models,omitempty"`
+	Provider string        `yaml:"provider,omitempty"`
+	APIKey   string        `yaml:"api_key,omitempty"`
+	BaseURL  string        `yaml:"base_url,omitempty"`
+	Model    string        `yaml:"model,omitempty"`
+	Models   []ModelConfig `yaml:"models,omitempty"`
 }
 
 type ModelConfig struct {
@@ -130,17 +132,17 @@ type EmbeddingConfig struct {
 }
 
 type PlatformConfig struct {
-	WeCom    WeComConfig    `yaml:"wecom,omitempty"`
-	Slack    SlackConfig    `yaml:"slack,omitempty"`
-	Telegram TelegramConfig `yaml:"telegram,omitempty"`
-	Discord  DiscordConfig  `yaml:"discord,omitempty"`
-	WeChat   WeChatConfig   `yaml:"wechat,omitempty"`
-	Feishu   FeishuConfig   `yaml:"feishu,omitempty"`
-	DingTalk DingTalkConfig `yaml:"dingtalk,omitempty"`
-	WhatsApp WhatsAppConfig `yaml:"whatsapp,omitempty"`
-	LINE     LINEConfig     `yaml:"line,omitempty"`
-	Teams    TeamsConfig    `yaml:"teams,omitempty"`
-	Matrix   MatrixConfig   `yaml:"matrix,omitempty"`
+	WeCom      WeComConfig      `yaml:"wecom,omitempty"`
+	Slack      SlackConfig      `yaml:"slack,omitempty"`
+	Telegram   TelegramConfig   `yaml:"telegram,omitempty"`
+	Discord    DiscordConfig    `yaml:"discord,omitempty"`
+	WeChat     WeChatConfig     `yaml:"wechat,omitempty"`
+	Feishu     FeishuConfig     `yaml:"feishu,omitempty"`
+	DingTalk   DingTalkConfig   `yaml:"dingtalk,omitempty"`
+	WhatsApp   WhatsAppConfig   `yaml:"whatsapp,omitempty"`
+	LINE       LINEConfig       `yaml:"line,omitempty"`
+	Teams      TeamsConfig      `yaml:"teams,omitempty"`
+	Matrix     MatrixConfig     `yaml:"matrix,omitempty"`
 	GoogleChat GoogleChatConfig `yaml:"googlechat,omitempty"`
 	Mattermost MattermostConfig `yaml:"mattermost,omitempty"`
 	IMessage   IMessageConfig   `yaml:"imessage,omitempty"`
@@ -263,6 +265,16 @@ type SecurityConfig struct {
 	DisableFileTools    bool     `yaml:"disable_file_tools"`
 }
 
+type PromptBuildConfig struct {
+	RootDir            string `yaml:"root_dir,omitempty"`
+	TemplatesDir       string `yaml:"templates_dir,omitempty"`
+	SQLitePath         string `yaml:"sqlite_path,omitempty"`
+	AuditEnabled       bool   `yaml:"audit_enabled,omitempty"`
+	AuditDir           string `yaml:"audit_dir,omitempty"`
+	AuditRetentionDays int    `yaml:"audit_retention_days,omitempty"`
+	AuditFilePrefix    string `yaml:"audit_file_prefix,omitempty"`
+}
+
 type LoggingConfig struct {
 	Level string `yaml:"level"`
 	File  string `yaml:"file"`
@@ -310,6 +322,15 @@ func DefaultConfig() *Config {
 			ServerURL:     "wss://keeper.kayz.com/ws",
 			WebhookURL:    "https://keeper.kayz.com/webhook",
 			UseMediaProxy: true,
+		},
+		PromptBuild: PromptBuildConfig{
+			RootDir:            ".",
+			TemplatesDir:       "prompts",
+			SQLitePath:         ".coco.db",
+			AuditEnabled:       true,
+			AuditDir:           ".coco/promptbuild-audit",
+			AuditRetentionDays: 7,
+			AuditFilePrefix:    "promptbuild",
 		},
 	}
 }

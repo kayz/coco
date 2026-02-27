@@ -12,10 +12,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kayz/coco/internal/ai"
 	"github.com/kayz/coco/internal/config"
 	cronpkg "github.com/kayz/coco/internal/cron"
 	"github.com/kayz/coco/internal/logger"
 	"github.com/kayz/coco/internal/persist"
+	"github.com/kayz/coco/internal/promptbuild"
 	"github.com/kayz/coco/internal/router"
 	"github.com/kayz/coco/internal/search"
 	"github.com/kayz/coco/internal/security"
@@ -47,8 +49,10 @@ func getExecutableDir() string {
 
 // Agent processes messages using AI providers and tools
 type Agent struct {
-	providers          []Provider
-	currentProvider    int
+	modelRouter        *ai.ModelRouter
+	registry           *ai.Registry
+	providerCache      map[string]Provider
+	providerMu         sync.RWMutex
 	memory             *ConversationMemory
 	ragMemory          *RAGMemory
 	sessions           *SessionStore
@@ -69,16 +73,11 @@ type Agent struct {
 
 // Config holds agent configuration
 type Config struct {
-	Provider           string // "claude" or "deepseek" (default: "claude")
-	APIKey             string
-	BaseURL            string // Custom API base URL (optional)
-	Model              string // Model name (optional, uses provider default)
 	AutoApprove        bool     // Skip all confirmation prompts (default: false)
 	CustomInstructions string   // Additional instructions appended to system prompt (optional)
 	AllowedPaths       []string // Restrict file/shell operations to these directories (empty = no restriction)
 	DisableFileTools   bool     // Completely disable all file operation tools
 	Embedding          config.EmbeddingConfig
-	Models             []config.ModelConfig
 }
 
 // loadPromptFile reads a prompt file from the project root
@@ -87,21 +86,21 @@ func loadPromptFile(filename string) string {
 	if err != nil {
 		return ""
 	}
-	
+
 	dir := filepath.Dir(execPath)
 	paths := []string{
 		filepath.Join(dir, filename),
 		filepath.Join(".", filename),
 		filename,
 	}
-	
+
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err == nil {
 			return strings.TrimSpace(string(data))
 		}
 	}
-	
+
 	return ""
 }
 
@@ -110,79 +109,214 @@ func ConversationKey(platform, channelID, userID string) string {
 	return platform + ":" + channelID + ":" + userID
 }
 
-func (a *Agent) chatWithFailover(ctx context.Context, req ChatRequest) (ChatResponse, error) {
-	var lastErr error
-	count := len(a.providers)
-	if count == 0 {
-		return ChatResponse{}, fmt.Errorf("no providers available")
+func (a *Agent) chatWithModel(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	model := a.modelRouter.GetCurrentModel()
+	if model == nil {
+		return ChatResponse{}, fmt.Errorf("no current model")
 	}
-	indices := make([]int, count)
-	for k := range indices {
-		indices[k] = (a.currentProvider + k) % count
+
+	provider, err := a.getProviderForModel(model)
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("failed to get provider for model %s: %w", model.Name, err)
 	}
-	for _, idx := range indices {
-		provider := a.providers[idx]
-		logger.Debug("[AGENT] Trying provider: %s (index %d)", provider.Name(), idx)
-		resp, err := provider.Chat(ctx, req)
-		if err == nil {
-			if idx != a.currentProvider {
-				logger.Info("[AGENT] Switched to provider: %s", provider.Name())
-				a.currentProvider = idx
-			}
-			return resp, nil
-		}
-		logger.Warn("[AGENT] Provider %s failed: %v", provider.Name(), err)
-		lastErr = err
+
+	logger.Debug("[AGENT] Using model: %s (provider: %s)", model.Name, model.Provider)
+
+	resp, err := provider.Chat(ctx, req)
+	if err == nil {
+		a.modelRouter.RecordSuccess(model)
+		return resp, nil
 	}
-	return ChatResponse{}, fmt.Errorf("all providers failed, last error: %w", lastErr)
+
+	logger.Warn("[AGENT] Model %s failed: %v", model.Name, err)
+	a.modelRouter.RecordFailure(model)
+
+	newModel, failoverErr := a.modelRouter.Failover()
+	if failoverErr != nil {
+		return ChatResponse{}, fmt.Errorf("model %s failed, and failover failed: %w", model.Name, err)
+	}
+
+	logger.Info("[AGENT] Failover to model: %s", newModel.Name)
+
+	newProvider, err := a.getProviderForModel(newModel)
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("failed to get provider for failover model %s: %w", newModel.Name, err)
+	}
+
+	resp, err = newProvider.Chat(ctx, req)
+	if err == nil {
+		a.modelRouter.RecordSuccess(newModel)
+		return resp, nil
+	}
+
+	logger.Warn("[AGENT] Failover model %s also failed: %v", newModel.Name, err)
+	a.modelRouter.RecordFailure(newModel)
+
+	return ChatResponse{}, fmt.Errorf("all models failed, last error: %w", err)
 }
 
-func (a *Agent) currentProviderName() string {
-	if len(a.providers) == 0 {
+func (a *Agent) getProviderForModel(model *ai.ModelConfig) (Provider, error) {
+	key := model.Provider + ":" + model.Code
+
+	a.providerMu.RLock()
+	if provider, ok := a.providerCache[key]; ok {
+		a.providerMu.RUnlock()
+		return provider, nil
+	}
+	a.providerMu.RUnlock()
+
+	a.providerMu.Lock()
+	defer a.providerMu.Unlock()
+
+	if provider, ok := a.providerCache[key]; ok {
+		return provider, nil
+	}
+
+	providerConfig, ok := a.registry.GetProvider(model.Provider)
+	if !ok {
+		return nil, fmt.Errorf("provider not found: %s", model.Provider)
+	}
+
+	provider, err := a.createProvider(providerConfig, model.Code)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create provider %s: %w", model.Provider, err)
+	}
+
+	a.providerCache[key] = provider
+	return provider, nil
+}
+
+func (a *Agent) createProvider(cfg *ai.ProviderConfig, modelCode string) (Provider, error) {
+	switch cfg.Type {
+	case "deepseek":
+		return NewDeepSeekProvider(DeepSeekConfig{
+			APIKey:  cfg.APIKey,
+			BaseURL: cfg.BaseURL,
+			Model:   modelCode,
+		})
+	case "kimi", "moonshot":
+		return NewKimiProvider(KimiConfig{
+			APIKey:  cfg.APIKey,
+			BaseURL: cfg.BaseURL,
+			Model:   modelCode,
+		})
+	case "qwen", "qianwen", "tongyi":
+		return NewQwenProvider(QwenConfig{
+			APIKey:  cfg.APIKey,
+			BaseURL: cfg.BaseURL,
+			Model:   modelCode,
+		})
+	case "claude", "anthropic", "":
+		return NewClaudeProvider(ClaudeConfig{
+			APIKey:  cfg.APIKey,
+			BaseURL: cfg.BaseURL,
+			Model:   modelCode,
+		})
+	default:
+		return a.createOpenAICompatProvider(cfg, modelCode)
+	}
+}
+
+func (a *Agent) createOpenAICompatProvider(cfg *ai.ProviderConfig, modelCode string) (Provider, error) {
+	defaults := map[string]struct {
+		baseURL string
+		model   string
+	}{
+		"minimax":     {"https://api.minimax.chat/v1", "MiniMax-Text-01"},
+		"doubao":      {"https://ark.cn-beijing.volces.com/api/v3", "doubao-pro-32k"},
+		"zhipu":       {"https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"},
+		"openai":      {"https://api.openai.com/v1", "gpt-4o"},
+		"gemini":      {"https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.0-flash"},
+		"yi":          {"https://api.lingyiwanwu.com/v1", "yi-large"},
+		"stepfun":     {"https://api.stepfun.com/v1", "step-2-16k"},
+		"siliconflow": {"https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-72B-Instruct"},
+		"grok":        {"https://api.x.ai/v1", "grok-2-latest"},
+		"baichuan":    {"https://api.baichuan-ai.com/v1", "Baichuan4"},
+		"spark":       {"https://spark-api-open.xf-yun.com/v1", "generalv3.5"},
+		"hunyuan":     {"https://api.hunyuan.cloud.tencent.com/v1", "hunyuan-turbos-latest"},
+	}
+
+	aliases := map[string]string{
+		"glm":         "zhipu",
+		"chatglm":     "zhipu",
+		"gpt":         "openai",
+		"chatgpt":     "openai",
+		"lingyiwanwu": "yi",
+		"wanwu":       "yi",
+		"google":      "gemini",
+		"xai":         "grok",
+		"bytedance":   "doubao",
+		"volcengine":  "doubao",
+		"iflytek":     "spark",
+		"xunfei":      "spark",
+		"tencent":     "hunyuan",
+		"hungyuan":    "hunyuan",
+	}
+
+	name := cfg.Type
+	if canonical, ok := aliases[name]; ok {
+		name = canonical
+	}
+
+	defaultURL := ""
+	defaultModel := ""
+	if d, ok := defaults[name]; ok {
+		defaultURL = d.baseURL
+		defaultModel = d.model
+	}
+
+	if defaultURL == "" {
+		return nil, fmt.Errorf("unknown provider: %s", cfg.Type)
+	}
+
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = defaultURL
+	}
+
+	model := modelCode
+	if model == "" {
+		model = defaultModel
+	}
+
+	return NewOpenAICompatProvider(OpenAICompatConfig{
+		ProviderName: name,
+		APIKey:       cfg.APIKey,
+		BaseURL:      baseURL,
+		Model:        model,
+		DefaultURL:   defaultURL,
+		DefaultModel: defaultModel,
+	})
+}
+
+func (a *Agent) currentModelName() string {
+	model := a.modelRouter.GetCurrentModel()
+	if model == nil {
 		return "unknown"
 	}
-	return a.providers[a.currentProvider].Name()
+	return model.Name
 }
 
 // New creates a new Agent with the specified provider
 func New(cfg Config) (*Agent, error) {
-	var providers []Provider
-
-	for _, m := range cfg.Models {
-		if m.APIKey == "" {
-			continue
-		}
-		if m.Enabled == false {
-			continue
-		}
-		p, err := createProvider(Config{
-			Provider: m.Provider,
-			APIKey:   m.APIKey,
-			BaseURL:  m.BaseURL,
-			Model:    m.Model,
-		})
-		if err != nil {
-			log.Printf("[AGENT] Failed to create provider %s: %v", m.Provider, err)
-			continue
-		}
-		providers = append(providers, p)
-		log.Printf("[AGENT] Added provider: %s", p.Name())
+	registry, err := ai.LoadRegistry()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load registry: %w", err)
 	}
 
-	if len(providers) == 0 {
-		if cfg.APIKey == "" {
-			return nil, fmt.Errorf("API key is required")
-		}
-		p, err := createProvider(cfg)
-		if err != nil {
-			return nil, err
-		}
-		providers = append(providers, p)
+	configCfg, err := config.Load()
+	if err != nil {
+		configCfg = config.DefaultConfig()
 	}
 
-	if len(providers) == 0 {
-		return nil, fmt.Errorf("no valid providers configured")
+	cooldownDuration := 5 * time.Minute
+	if configCfg.ModelCooldown != "" {
+		if d, err := time.ParseDuration(configCfg.ModelCooldown); err == nil {
+			cooldownDuration = d
+		}
 	}
+
+	modelRouter := ai.NewModelRouter(registry, cooldownDuration)
 
 	exeDir := getExecutableDir()
 	if exeDir == "" {
@@ -198,11 +332,6 @@ func New(cfg Config) (*Agent, error) {
 	memory := NewMemory(persistStore, 200)
 
 	searchRegistry := search.NewRegistry()
-	configCfg, err := config.Load()
-	if err != nil {
-		configCfg = config.DefaultConfig()
-	}
-
 	searchManager, err := search.NewManager(configCfg.Search, searchRegistry)
 	if err != nil {
 		log.Printf("[AGENT] Failed to initialize search manager: %v", err)
@@ -219,8 +348,9 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	agent := &Agent{
-		providers:          providers,
-		currentProvider:    0,
+		modelRouter:        modelRouter,
+		registry:           registry,
+		providerCache:      make(map[string]Provider),
 		memory:             memory,
 		ragMemory:          ragMemory,
 		sessions:           NewSessionStore(),
@@ -243,7 +373,7 @@ func New(cfg Config) (*Agent, error) {
 func (a *Agent) initializeDailyReport() {
 	yesterday := persist.GetYesterdayDate()
 	report, err := a.persistStore.GetDailyReport(yesterday, "default")
-	
+
 	if err != nil || report == nil {
 		a.generateDailyReport(yesterday)
 	}
@@ -255,14 +385,14 @@ func (a *Agent) initializeDailyReport() {
 // generateDailyReport generates a daily report for a specific date
 func (a *Agent) generateDailyReport(date string) {
 	report := &persist.DailyReport{
-		Date:    date,
-		UserID:  "default",
-		Summary: "系统启动时自动生成的日报",
-		Content: fmt.Sprintf("日报自动生成于 %s", time.Now().Format(time.RFC3339)),
-		Tasks:   []persist.TaskItem{},
+		Date:      date,
+		UserID:    "default",
+		Summary:   "系统启动时自动生成的日报",
+		Content:   fmt.Sprintf("日报自动生成于 %s", time.Now().Format(time.RFC3339)),
+		Tasks:     []persist.TaskItem{},
 		Calendars: []persist.CalendarItem{},
 	}
-	
+
 	if err := a.persistStore.SaveDailyReport(report); err != nil {
 		log.Printf("[AGENT] Failed to save daily report: %v", err)
 	}
@@ -273,7 +403,7 @@ func (a *Agent) isFirstMessage(key string) bool {
 	a.firstMessageMu.RLock()
 	_, sent := a.firstMessageSent[key]
 	a.firstMessageMu.RUnlock()
-	
+
 	if !sent {
 		a.firstMessageMu.Lock()
 		a.firstMessageSent[key] = true
@@ -288,12 +418,12 @@ func (a *Agent) getReportNotification() string {
 	if a.latestReport == nil {
 		return ""
 	}
-	
+
 	notification := fmt.Sprintf("📋 今日日报 (%s)\n", a.latestReport.Date)
 	if a.latestReport.Summary != "" {
 		notification += fmt.Sprintf("摘要: %s\n\n", a.latestReport.Summary)
 	}
-	
+
 	if len(a.latestReport.Tasks) > 0 {
 		notification += "📌 当前任务:\n"
 		for _, task := range a.latestReport.Tasks {
@@ -307,101 +437,15 @@ func (a *Agent) getReportNotification() string {
 		}
 		notification += "\n"
 	}
-	
+
 	if len(a.latestReport.Calendars) > 0 {
 		notification += "📅 日历事件:\n"
 		for _, cal := range a.latestReport.Calendars {
 			notification += fmt.Sprintf("  - %s (%s)\n", cal.Title, cal.StartTime)
 		}
 	}
-	
+
 	return notification
-}
-
-// openaiCompatProviders maps provider names to their default base URLs and models.
-var openaiCompatProviders = map[string]struct {
-	baseURL string
-	model   string
-}{
-	"minimax":    {"https://api.minimax.chat/v1", "MiniMax-Text-01"},
-	"doubao":     {"https://ark.cn-beijing.volces.com/api/v3", "doubao-pro-32k"},
-	"zhipu":      {"https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"},
-	"openai":     {"https://api.openai.com/v1", "gpt-4o"},
-	"gemini":     {"https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.0-flash"},
-	"yi":         {"https://api.lingyiwanwu.com/v1", "yi-large"},
-	"stepfun":    {"https://api.stepfun.com/v1", "step-2-16k"},
-	"siliconflow": {"https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-72B-Instruct"},
-	"grok":       {"https://api.x.ai/v1", "grok-2-latest"},
-	"baichuan":   {"https://api.baichuan-ai.com/v1", "Baichuan4"},
-	"spark":      {"https://spark-api-open.xf-yun.com/v1", "generalv3.5"},
-	"hunyuan":    {"https://api.hunyuan.cloud.tencent.com/v1", "hunyuan-turbos-latest"},
-}
-
-// openaiCompatAliases maps alternative names to canonical provider names.
-var openaiCompatAliases = map[string]string{
-	"glm":          "zhipu",
-	"chatglm":      "zhipu",
-	"gpt":          "openai",
-	"chatgpt":      "openai",
-	"lingyiwanwu":  "yi",
-	"wanwu":        "yi",
-	"google":       "gemini",
-	"xai":          "grok",
-	"bytedance":    "doubao",
-	"volcengine":   "doubao",
-	"iflytek":      "spark",
-	"xunfei":       "spark",
-	"tencent":      "hunyuan",
-	"hungyuan":     "hunyuan",
-}
-
-// createProvider creates the appropriate AI provider based on config
-func createProvider(cfg Config) (Provider, error) {
-	name := strings.ToLower(cfg.Provider)
-
-	switch name {
-	case "deepseek":
-		return NewDeepSeekProvider(DeepSeekConfig{
-			APIKey:  cfg.APIKey,
-			BaseURL: cfg.BaseURL,
-			Model:   cfg.Model,
-		})
-	case "kimi", "moonshot":
-		return NewKimiProvider(KimiConfig{
-			APIKey:  cfg.APIKey,
-			BaseURL: cfg.BaseURL,
-			Model:   cfg.Model,
-		})
-	case "qwen", "qianwen", "tongyi":
-		return NewQwenProvider(QwenConfig{
-			APIKey:  cfg.APIKey,
-			BaseURL: cfg.BaseURL,
-			Model:   cfg.Model,
-		})
-	case "claude", "anthropic", "":
-		return NewClaudeProvider(ClaudeConfig{
-			APIKey:  cfg.APIKey,
-			BaseURL: cfg.BaseURL,
-			Model:   cfg.Model,
-		})
-	default:
-		// Check aliases
-		if canonical, ok := openaiCompatAliases[name]; ok {
-			name = canonical
-		}
-		// Check OpenAI-compatible providers
-		if defaults, ok := openaiCompatProviders[name]; ok {
-			return NewOpenAICompatProvider(OpenAICompatConfig{
-				ProviderName: name,
-				APIKey:       cfg.APIKey,
-				BaseURL:      cfg.BaseURL,
-				Model:        cfg.Model,
-				DefaultURL:   defaults.baseURL,
-				DefaultModel: defaults.model,
-			})
-		}
-		return nil, fmt.Errorf("unknown provider: %s (supported: claude, deepseek, kimi, qwen, minimax, doubao, zhipu, openai, gemini, yi, stepfun, siliconflow, grok, baichuan, spark, hunyuan)", cfg.Provider)
-	}
 }
 
 // handleBuiltinCommand handles special commands without calling AI
@@ -464,12 +508,12 @@ func (a *Agent) handleBuiltinCommand(msg router.Message) (router.Response, bool)
 - 详细模式: %v
 - AI 模型: %s`,
 				msg.Platform, msg.Username, len(history),
-				settings.ThinkingLevel, settings.Verbose, a.currentProviderName()),
+				settings.ThinkingLevel, settings.Verbose, a.currentModelName()),
 		}, true
 
 	case "/model", "模型":
 		return router.Response{
-			Text: fmt.Sprintf("当前模型: %s", a.currentProviderName()),
+			Text: fmt.Sprintf("当前模型: %s", a.currentModelName()),
 		}, true
 
 	case "/tools", "工具", "工具列表":
@@ -614,7 +658,7 @@ func (a *Agent) ExecutePrompt(ctx context.Context, platform, channelID, userID, 
 func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.Response, error) {
 	a.currentMsg = msg
 	a.cronCreatedCount = 0
-	logger.Info("[Agent] Processing message from %s: %s (provider: %s)", msg.Username, msg.Text, a.currentProviderName())
+	logger.Info("[Agent] Processing message from %s: %s (model: %s)", msg.Username, msg.Text, a.currentModelName())
 
 	// Handle built-in commands
 	if resp, handled := a.handleBuiltinCommand(msg); handled {
@@ -634,7 +678,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 	// Create messages with history
 	messages := make([]Message, 0, len(history)+1)
 	messages = append(messages, history...)
-	
+
 	// Add current message
 	messages = append(messages, Message{
 		Role:    "user",
@@ -669,12 +713,12 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 	// Load prompt files
 	aboutMe := loadPromptFile("ABOUTME.md")
 	systemContent := loadPromptFile("SYSTEM.md")
-	
+
 	// Fallback to default if files not found
 	if aboutMe == "" {
 		aboutMe = "You are coco, a helpful AI assistant running on the user's computer."
 	}
-	
+
 	// Retrieve relevant memories from RAG if enabled
 	var memoriesSection string
 	var preferencesSection string
@@ -700,11 +744,11 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 			logger.Debug("[Agent] Retrieved %d user preferences", len(preferences))
 		}
 	}
-	
+
 	// System prompt with actual paths
 	var systemPrompt string
 	if systemContent != "" {
-		systemPrompt = fmt.Sprintf(aboutMe+"%s\n\n"+systemContent, 
+		systemPrompt = fmt.Sprintf(aboutMe+"%s\n\n"+systemContent,
 			autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg.Username, time.Now().Format("2006-01-02"))
 	} else {
 		systemPrompt = fmt.Sprintf(`You are coco, a helpful AI assistant running on the user's computer.%s
@@ -845,8 +889,20 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 		systemPrompt += "\n\n## Custom Instructions\n" + a.customInstructions
 	}
 
+	systemPrompt += "\n\n" + a.modelRouter.FormatModelsPrompt()
+
+	// Optional promptbuild integration (disabled by default).
+	// When enabled, any failure falls back to legacy system prompt behavior.
+	if isPromptBuildEnabled() {
+		if pbPrompt, used, err := a.buildPromptWithPromptBuild(msg, thinkingPrompt, a.getReportNotification()); err != nil {
+			logger.Warn("[Agent] promptbuild failed, fallback to legacy prompt: %v", err)
+		} else if used {
+			systemPrompt = pbPrompt + "\n\n" + systemPrompt
+		}
+	}
+
 	// Call AI provider
-	resp, err := a.chatWithFailover(ctx, ChatRequest{
+	resp, err := a.chatWithModel(ctx, ChatRequest{
 		Messages:     messages,
 		SystemPrompt: systemPrompt,
 		Tools:        tools,
@@ -899,7 +955,7 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 		}
 
 		// Continue the conversation
-		resp, err = a.chatWithFailover(ctx, ChatRequest{
+		resp, err = a.chatWithModel(ctx, ChatRequest{
 			Messages:     messages,
 			SystemPrompt: systemPrompt,
 			Tools:        tools,
@@ -923,9 +979,9 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 	if a.ragMemory != nil && a.ragMemory.IsEnabled() {
 		conversationText := fmt.Sprintf("User: %s\nAssistant: %s", msg.Text, resp.Content)
 		err := a.ragMemory.AddMemory(ctx, MemoryItem{
-			ID:        fmt.Sprintf("conv-%s-%d", convKey, time.Now().Unix()),
-			Type:      "conversation",
-			Content:   conversationText,
+			ID:      fmt.Sprintf("conv-%s-%d", convKey, time.Now().Unix()),
+			Type:    "conversation",
+			Content: conversationText,
 			Metadata: map[string]string{
 				"platform":  msg.Platform,
 				"channel":   msg.ChannelID,
@@ -955,6 +1011,42 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 	return router.Response{Text: resp.Content, Files: pendingFiles}, nil
 }
 
+func (a *Agent) buildPromptWithPromptBuild(msg router.Message, thinkingPrompt string, reportNotification string) (string, bool, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return "", false, err
+	}
+
+	builder := promptbuild.NewBuilder(cfg.PromptBuild)
+	req := promptbuild.BuildRequest{
+		Requirements: "Handle this user request safely and helpfully.",
+		UserInput:    msg.Text,
+		History: promptbuild.HistorySpec{
+			Platform:  msg.Platform,
+			ChannelID: msg.ChannelID,
+			UserID:    msg.UserID,
+			Limit:     200,
+		},
+		Inputs: map[string]string{
+			"thinking_prompt":     thinkingPrompt,
+			"report_notification": reportNotification,
+		},
+	}
+
+	promptText, err := builder.Build(req)
+	if err != nil {
+		return "", false, err
+	}
+	if strings.TrimSpace(promptText) == "" {
+		return "", false, fmt.Errorf("empty promptbuild output")
+	}
+	return promptText, true, nil
+}
+
+func isPromptBuildEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("COCO_AGENT_PROMPTBUILD_ENABLE")), "true")
+}
+
 // formatSkillsSection returns a formatted string listing eligible skills, or empty if none.
 func formatSkillsSection() string {
 	cfg, err := config.Load()
@@ -980,6 +1072,35 @@ func formatSkillsSection() string {
 // buildToolsList creates the tools list for the AI provider
 func (a *Agent) buildToolsList() []Tool {
 	return []Tool{
+		// === AI MODEL ROUTING ===
+		{
+			Name:        "ai.list_models",
+			Description: "列出所有可用的 AI 模型及其能力",
+			InputSchema: jsonSchema(map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			}),
+		},
+		{
+			Name:        "ai.switch_model",
+			Description: "切换到指定的 AI 模型",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"model_name": map[string]string{"type": "string", "description": "模型名称，如 gpt-4o、deepseek-chat"},
+					"force":      map[string]string{"type": "boolean", "description": "强制切换，忽略冷却状态（默认 false）"},
+				},
+				"required": []string{"model_name"},
+			}),
+		},
+		{
+			Name:        "ai.get_current_model",
+			Description: "获取当前使用的 AI 模型",
+			InputSchema: jsonSchema(map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			}),
+		},
 		// === DAILY REPORT ===
 		{
 			Name:        "save_daily_report",
@@ -1058,7 +1179,7 @@ func (a *Agent) buildToolsList() []Tool {
 			Name:        "get_conversation_summary",
 			Description: "获取当前对话的摘要信息",
 			InputSchema: jsonSchema(map[string]any{
-				"type": "object",
+				"type":       "object",
 				"properties": map[string]any{},
 			}),
 		},
@@ -1293,12 +1414,12 @@ func (a *Agent) buildToolsList() []Tool {
 			Name:        "web_search",
 			Description: "Search the web using configured search engines (Metaso, Tavily, or custom engines). Start query with '搜索' or 'search' for multi-engine search.",
 			InputSchema: jsonSchema(map[string]any{
-				"type":       "object",
+				"type": "object",
 				"properties": map[string]any{
 					"query": map[string]string{"type": "string", "description": "Search query string"},
 					"limit": map[string]string{"type": "number", "description": "Maximum number of results (default: 5)"},
 				},
-				"required":   []string{"query"},
+				"required": []string{"query"},
 			}),
 		},
 		{
@@ -1747,6 +1868,12 @@ func (a *Agent) executeTool(ctx context.Context, name string, input json.RawMess
 
 	// Handle search tools that need Agent context
 	switch name {
+	case "ai.list_models":
+		return a.executeAIListModels()
+	case "ai.switch_model":
+		return a.executeAISwitchModel(args)
+	case "ai.get_current_model":
+		return a.executeAIGetCurrentModel()
 	case "web_search":
 		query, _ := args["query"].(string)
 		return a.executeWebSearchWithManager(ctx, query)
@@ -2382,7 +2509,7 @@ Conversation:
 Extract ONLY the preferences, one per line, starting with "- ". Keep it concise and actionable.`, conversationText.String())
 
 	// Use AI to extract preferences
-	resp, err := a.chatWithFailover(ctx, ChatRequest{
+	resp, err := a.chatWithModel(ctx, ChatRequest{
 		Messages: []Message{
 			{Role: "user", Content: preferencePrompt},
 		},
@@ -2403,9 +2530,9 @@ Extract ONLY the preferences, one per line, starting with "- ". Keep it concise 
 			preference := strings.TrimSpace(line[2:])
 			if preference != "" {
 				err := a.ragMemory.AddMemory(ctx, MemoryItem{
-					ID:        fmt.Sprintf("pref-%s-%d", convKey, time.Now().UnixNano()),
-					Type:      "preference",
-					Content:   preference,
+					ID:      fmt.Sprintf("pref-%s-%d", convKey, time.Now().UnixNano()),
+					Type:    "preference",
+					Content: preference,
 					Metadata: map[string]string{
 						"platform":  msg.Platform,
 						"channel":   msg.ChannelID,
@@ -2421,4 +2548,56 @@ Extract ONLY the preferences, one per line, starting with "- ". Keep it concise 
 			}
 		}
 	}
+}
+
+func (a *Agent) executeAIListModels() string {
+	models := a.modelRouter.ListModels()
+	if len(models) == 0 {
+		return "No models available"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("可用模型列表：\n\n")
+	for _, m := range models {
+		sb.WriteString(fmt.Sprintf("- %s\n", m.Name))
+		sb.WriteString(fmt.Sprintf("  - 智力：%s\n", m.IntellectText()))
+		sb.WriteString(fmt.Sprintf("  - 速度：%s\n", m.SpeedText()))
+		sb.WriteString(fmt.Sprintf("  - 费用：%s\n", m.CostText()))
+		sb.WriteString(fmt.Sprintf("  - 能力：%s\n", m.SkillsText()))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func (a *Agent) executeAISwitchModel(args map[string]any) string {
+	modelName, _ := args["model_name"].(string)
+	if modelName == "" {
+		return "Error: model_name is required"
+	}
+
+	force := false
+	if f, ok := args["force"].(bool); ok {
+		force = f
+	}
+
+	if err := a.modelRouter.SwitchToModel(modelName, force); err != nil {
+		return fmt.Sprintf("Error switching model: %v", err)
+	}
+
+	return fmt.Sprintf("Successfully switched to model: %s", modelName)
+}
+
+func (a *Agent) executeAIGetCurrentModel() string {
+	model := a.modelRouter.GetCurrentModel()
+	if model == nil {
+		return "No current model"
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("当前模型：%s\n", model.Name))
+	sb.WriteString(fmt.Sprintf("  - 智力：%s\n", model.IntellectText()))
+	sb.WriteString(fmt.Sprintf("  - 速度：%s\n", model.SpeedText()))
+	sb.WriteString(fmt.Sprintf("  - 费用：%s\n", model.CostText()))
+	sb.WriteString(fmt.Sprintf("  - 能力：%s\n", model.SkillsText()))
+	return sb.String()
 }

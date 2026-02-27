@@ -20,6 +20,13 @@ type BuildRequest struct {
 	History      HistorySpec `json:"history,omitempty"`
 	UserInput    string      `json:"user_input,omitempty"`
 
+	// Agent selects a named prompt assembly spec.
+	Agent string `json:"agent,omitempty"`
+	// SpecPath explicitly sets the prompt assembly spec file path.
+	SpecPath string `json:"spec_path,omitempty"`
+	// Inputs provides additional values consumed by spec sections.
+	Inputs map[string]string `json:"inputs,omitempty"`
+
 	// MaxHistory is a fallback limit when History.Limit is not set.
 	MaxHistory int `json:"max_history,omitempty"`
 

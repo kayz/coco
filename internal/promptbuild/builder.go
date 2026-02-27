@@ -22,13 +22,50 @@ func NewBuilder(cfg config.PromptBuildConfig) *Builder {
 
 // Build assembles a prompt and returns the final text.
 func (b *Builder) Build(req BuildRequest) (string, error) {
+	requestedHeaders := req.IncludeSectionHeaders != nil
+	requestedMaxHistory := req.MaxHistory > 0
+
 	req = b.applyDefaults(req)
 
-	var sections []section
+	spec, err := b.loadPromptAssemblySpec(req)
+	if err != nil {
+		return "", err
+	}
+	if spec != nil {
+		if !requestedHeaders && spec.Defaults.IncludeSectionHeaders != nil {
+			v := *spec.Defaults.IncludeSectionHeaders
+			req.IncludeSectionHeaders = &v
+		}
+		if !requestedMaxHistory && spec.Defaults.MaxHistory > 0 {
+			req.MaxHistory = spec.Defaults.MaxHistory
+		}
+	}
+
 	includeHeaders := true
 	if req.IncludeSectionHeaders != nil {
 		includeHeaders = *req.IncludeSectionHeaders
 	}
+
+	var sections []section
+	if spec == nil {
+		sections, err = b.buildLegacySections(req, includeHeaders)
+	} else {
+		sections, err = b.buildSectionsFromSpec(req, spec, includeHeaders)
+	}
+	if err != nil {
+		return "", err
+	}
+
+	finalPrompt := renderSections(sections)
+	if err := b.writeAuditRecord(req, finalPrompt, sections); err != nil {
+		logger.Warn("Prompt audit write failed: %v", err)
+	}
+
+	return finalPrompt, nil
+}
+
+func (b *Builder) buildLegacySections(req BuildRequest, includeHeaders bool) ([]section, error) {
+	var sections []section
 
 	systemText := b.readTemplateGroup(req.System)
 	taskText := b.readTemplateGroup(req.Task)
@@ -37,7 +74,7 @@ func (b *Builder) Build(req BuildRequest) (string, error) {
 	referenceText := b.readReferences(req.References)
 	historyText, err := b.buildHistory(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	sections = b.appendSection(sections, "System", systemText, includeHeaders)
@@ -49,22 +86,100 @@ func (b *Builder) Build(req BuildRequest) (string, error) {
 	sections = b.appendSection(sections, "Chat History", historyText, includeHeaders)
 	sections = b.appendSection(sections, "User Input", strings.TrimSpace(req.UserInput), includeHeaders)
 
-	return renderSections(sections), nil
+	return sections, nil
+}
+
+func (b *Builder) buildSectionsFromSpec(req BuildRequest, spec *PromptAssemblySpec, includeHeaders bool) ([]section, error) {
+	var sections []section
+	for _, sec := range spec.Sections {
+		title := strings.TrimSpace(sec.Title)
+		if title == "" {
+			title = strings.TrimSpace(sec.ID)
+		}
+
+		content, err := b.resolveSpecSectionContent(req, sec)
+		if err != nil {
+			return nil, err
+		}
+		if sec.Required && strings.TrimSpace(content) == "" {
+			return nil, fmt.Errorf("required section %q is empty", sec.ID)
+		}
+		sections = b.appendSection(sections, title, content, includeHeaders)
+	}
+	return sections, nil
+}
+
+func (b *Builder) resolveSpecSectionContent(req BuildRequest, sec SectionSpec) (string, error) {
+	switch strings.TrimSpace(sec.SourceType) {
+	case "templates":
+		return b.readTemplateGroup(sec.Templates), nil
+	case "request_field":
+		return b.resolveRequestField(req, sec.Source), nil
+	case "references":
+		if strings.TrimSpace(sec.Source) == "" {
+			return b.readReferences(req.References), nil
+		}
+		return b.readReferences(splitCSV(sec.Source)), nil
+	case "history":
+		return b.buildHistory(req)
+	case "user_input":
+		return strings.TrimSpace(req.UserInput), nil
+	case "inline_text":
+		if v, ok := req.Inputs[strings.TrimSpace(sec.Source)]; ok {
+			return strings.TrimSpace(v), nil
+		}
+		return strings.TrimSpace(sec.Source), nil
+	default:
+		return "", fmt.Errorf("unsupported source_type %q in section %q", sec.SourceType, sec.ID)
+	}
+}
+
+func (b *Builder) resolveRequestField(req BuildRequest, field string) string {
+	key := strings.TrimSpace(field)
+	if key == "" {
+		return ""
+	}
+	if v, ok := req.Inputs[key]; ok {
+		return strings.TrimSpace(v)
+	}
+
+	switch key {
+	case "requirements":
+		return strings.TrimSpace(req.Requirements)
+	case "user_input":
+		return strings.TrimSpace(req.UserInput)
+	case "agent":
+		return strings.TrimSpace(req.Agent)
+	case "spec_path":
+		return strings.TrimSpace(req.SpecPath)
+	default:
+		return ""
+	}
+}
+
+func splitCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 type section struct {
-	title   string
-	content string
+	title         string
+	content       string
+	includeHeader bool
 }
 
 func (b *Builder) appendSection(list []section, title, content string, includeHeader bool) []section {
 	if strings.TrimSpace(content) == "" {
 		return list
 	}
-	if !includeHeader {
-		title = ""
-	}
-	return append(list, section{title: title, content: content})
+	return append(list, section{title: title, content: content, includeHeader: includeHeader})
 }
 
 func renderSections(sections []section) string {
@@ -73,7 +188,7 @@ func renderSections(sections []section) string {
 		if i > 0 {
 			out.WriteString("\n\n")
 		}
-		if s.title != "" {
+		if s.includeHeader && s.title != "" {
 			out.WriteString("### ")
 			out.WriteString(s.title)
 			out.WriteString("\n\n")
@@ -84,13 +199,12 @@ func renderSections(sections []section) string {
 }
 
 func (b *Builder) applyDefaults(req BuildRequest) BuildRequest {
-	if req.MaxHistory <= 0 {
-		req.MaxHistory = 200
-	}
 	if req.IncludeSectionHeaders == nil {
-		// default should be true
 		defaultValue := true
 		req.IncludeSectionHeaders = &defaultValue
+	}
+	if req.MaxHistory <= 0 {
+		req.MaxHistory = 200
 	}
 	if b.cfg.RootDir == "" {
 		b.cfg.RootDir = "."
@@ -100,6 +214,20 @@ func (b *Builder) applyDefaults(req BuildRequest) BuildRequest {
 	}
 	if b.cfg.SQLitePath == "" {
 		b.cfg.SQLitePath = ".coco.db"
+	}
+
+	defaultAuditEnabled := b.cfg.AuditDir == "" && b.cfg.AuditRetentionDays <= 0 && strings.TrimSpace(b.cfg.AuditFilePrefix) == ""
+	if defaultAuditEnabled {
+		b.cfg.AuditEnabled = true
+	}
+	if b.cfg.AuditDir == "" {
+		b.cfg.AuditDir = ".coco/promptbuild-audit"
+	}
+	if b.cfg.AuditRetentionDays <= 0 {
+		b.cfg.AuditRetentionDays = 7
+	}
+	if strings.TrimSpace(b.cfg.AuditFilePrefix) == "" {
+		b.cfg.AuditFilePrefix = "promptbuild"
 	}
 	return req
 }

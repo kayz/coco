@@ -1,0 +1,49 @@
+version: v1
+agent: daily_research_analyst
+description: "Example prompt assembly contract for a daily research analyst agent."
+defaults:
+  include_section_headers: true
+  max_history: 120
+sections:
+  - id: system_role
+    title: System Role
+    required: true
+    source_type: templates
+    templates:
+      - system/research_analyst_role.md
+    order: 10
+
+  - id: task_objective
+    title: Task Objective
+    required: true
+    source_type: request_field
+    source: requirements
+    order: 20
+
+  - id: portfolio_constraints
+    title: Portfolio Constraints
+    required: true
+    source_type: references
+    source: references/trading_style.md,references/current_positions.md
+    order: 30
+
+  - id: evidence_digest
+    title: Evidence Digest
+    required: true
+    source_type: references
+    order: 40
+
+  - id: output_contract
+    title: Output Contract
+    required: true
+    source_type: templates
+    templates:
+      - format/daily_research_output.md
+    order: 50
+
+  - id: analysis_instruction
+    title: Analysis Instruction
+    required: true
+    source_type: inline_text
+    source: analysis_instruction
+    order: 60
