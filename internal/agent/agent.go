@@ -57,6 +57,7 @@ type Agent struct {
 	ragMemory             *RAGMemory
 	markdownMemory        *MarkdownMemory
 	sessions              *SessionStore
+	subSessions           *SubSessionStore
 	autoApprove           bool
 	customInstructions    string
 	cronScheduler         *cronpkg.Scheduler
@@ -441,6 +442,7 @@ func New(cfg Config) (*Agent, error) {
 		ragMemory:          ragMemory,
 		markdownMemory:     markdownMemory,
 		sessions:           NewSessionStore(),
+		subSessions:        NewSubSessionStore(),
 		autoApprove:        cfg.AutoApprove,
 		customInstructions: cfg.CustomInstructions,
 		configPath:         config.ConfigPath(),
@@ -1812,6 +1814,28 @@ func (a *Agent) buildToolsList() []Tool {
 				"properties": map[string]any{},
 			}),
 		},
+		{
+			Name:        "sessions_spawn",
+			Description: "创建一个子 Agent 会话，用于分派并跟踪子任务",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]string{"type": "string", "description": "子会话名称（可选）"},
+				},
+			}),
+		},
+		{
+			Name:        "sessions_send",
+			Description: "向指定子 Agent 会话发送消息并记录状态",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]string{"type": "string", "description": "子会话 ID"},
+					"message":    map[string]string{"type": "string", "description": "发送给子会话的消息"},
+				},
+				"required": []string{"session_id", "message"},
+			}),
+		},
 		// === DAILY REPORT ===
 		{
 			Name:        "save_daily_report",
@@ -2653,6 +2677,10 @@ func (a *Agent) executeTool(ctx context.Context, name string, input json.RawMess
 		return a.executeMemorySearch(ctx, args)
 	case "memory_get":
 		return a.executeMemoryGet(args)
+	case "sessions_spawn":
+		return a.executeSessionsSpawn(args)
+	case "sessions_send":
+		return a.executeSessionsSend(args)
 	case "spawn_agent":
 		return a.executeSpawnAgent(ctx, args)
 	}
@@ -3281,6 +3309,30 @@ func (a *Agent) executeMemoryGet(args map[string]any) string {
 	header := fmt.Sprintf("📄 Memory file: %s\nsource: %s\nupdated: %s\n\n",
 		result.Path, result.Source, result.ModifiedAt.Format("2006-01-02 15:04"))
 	return header + content
+}
+
+func (a *Agent) executeSessionsSpawn(args map[string]any) string {
+	if a.subSessions == nil {
+		a.subSessions = NewSubSessionStore()
+	}
+	name, _ := args["name"].(string)
+	session := a.subSessions.Spawn(name)
+	return fmt.Sprintf("Sub-session created: id=%s name=%s", session.ID, session.Name)
+}
+
+func (a *Agent) executeSessionsSend(args map[string]any) string {
+	if a.subSessions == nil {
+		a.subSessions = NewSubSessionStore()
+	}
+
+	sessionID, _ := args["session_id"].(string)
+	message, _ := args["message"].(string)
+	updated, err := a.subSessions.Send(sessionID, message)
+	if err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+
+	return fmt.Sprintf("Message delivered to %s (%s), total messages: %d", updated.ID, updated.Name, updated.MessageCount)
 }
 
 func getString(m map[string]any, key string) string {

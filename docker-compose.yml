@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  coco-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: coco:latest
+    container_name: coco-web
+    command: ["web", "--port", "18080"]
+    ports:
+      - "18080:18080"
+    volumes:
+      - ./.coco:/app/.coco
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:18080/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
