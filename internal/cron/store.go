@@ -79,11 +79,17 @@ func (s *Store) init() error {
 		CREATE TABLE IF NOT EXISTS jobs (
 			id         TEXT PRIMARY KEY,
 			name       TEXT NOT NULL,
+			tag        TEXT,
+			job_type   TEXT,
 			schedule   TEXT NOT NULL,
 			tool       TEXT,
 			arguments  TEXT,
 			message    TEXT,
 			prompt     TEXT,
+			endpoint   TEXT,
+			auth_header TEXT,
+			relay_mode INTEGER NOT NULL DEFAULT 0,
+			source     TEXT,
 			platform   TEXT,
 			channel_id TEXT,
 			user_id    TEXT,
@@ -93,7 +99,64 @@ func (s *Store) init() error {
 			last_error TEXT
 		)
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Ensure schema evolution for existing installations.
+	if err := s.ensureColumnExists("jobs", "tag", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumnExists("jobs", "job_type", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumnExists("jobs", "endpoint", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumnExists("jobs", "auth_header", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumnExists("jobs", "relay_mode", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumnExists("jobs", "source", "TEXT"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) ensureColumnExists(table, column, columnDef string) error {
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("failed to inspect table %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid      int
+			name     string
+			colType  string
+			notnull  int
+			defaultV sql.NullString
+			primaryK int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notnull, &defaultV, &primaryK); err != nil {
+			return fmt.Errorf("failed to scan schema row: %w", err)
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to inspect table %s: %w", table, err)
+	}
+
+	_, err = s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, columnDef))
+	if err != nil {
+		return fmt.Errorf("failed to add column %s to %s: %w", column, table, err)
+	}
+	return nil
 }
 
 // migrateFromJSON imports jobs from the legacy crons.json if it exists
@@ -142,7 +205,8 @@ func (s *Store) Load() ([]*Job, error) {
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(`
-		SELECT id, name, schedule, tool, arguments, message, prompt,
+		SELECT id, name, tag, job_type, schedule, tool, arguments, message, prompt,
+		       endpoint, auth_header, relay_mode, source,
 		       platform, channel_id, user_id, enabled, created_at, last_run, last_error
 		FROM jobs
 	`)
@@ -196,17 +260,22 @@ func (s *Store) SaveJob(job *Job) error {
 	}
 
 	_, err = s.db.Exec(`
-		INSERT INTO jobs (id, name, schedule, tool, arguments, message, prompt,
+		INSERT INTO jobs (id, name, tag, job_type, schedule, tool, arguments, message, prompt,
+		                  endpoint, auth_header, relay_mode, source,
 		                  platform, channel_id, user_id, enabled, created_at, last_run, last_error)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
-			name=excluded.name, schedule=excluded.schedule, tool=excluded.tool,
+			name=excluded.name, tag=excluded.tag, job_type=excluded.job_type,
+			schedule=excluded.schedule, tool=excluded.tool,
 			arguments=excluded.arguments, message=excluded.message, prompt=excluded.prompt,
+			endpoint=excluded.endpoint, auth_header=excluded.auth_header,
+			relay_mode=excluded.relay_mode, source=excluded.source,
 			platform=excluded.platform, channel_id=excluded.channel_id, user_id=excluded.user_id,
 			enabled=excluded.enabled, created_at=excluded.created_at,
 			last_run=excluded.last_run, last_error=excluded.last_error
 	`,
-		job.ID, job.Name, job.Schedule, job.Tool, string(argsJSON), job.Message, job.Prompt,
+		job.ID, job.Name, job.Tag, job.Type, job.Schedule, job.Tool, string(argsJSON), job.Message, job.Prompt,
+		job.Endpoint, job.AuthHeader, boolToInt(job.RelayMode), job.Source,
 		job.Platform, job.ChannelID, job.UserID, enabled, job.CreatedAt.Format(time.RFC3339),
 		lastRun, lastError,
 	)
@@ -244,31 +313,44 @@ type scanner interface {
 
 func scanJob(s scanner) (*Job, error) {
 	var (
-		job       Job
-		argsJSON  sql.NullString
-		tool      sql.NullString
-		message   sql.NullString
-		prompt    sql.NullString
-		platform  sql.NullString
-		channelID sql.NullString
-		userID    sql.NullString
-		enabled   int
-		createdAt string
-		lastRun   sql.NullString
-		lastError sql.NullString
+		job        Job
+		tag        sql.NullString
+		jobType    sql.NullString
+		argsJSON   sql.NullString
+		tool       sql.NullString
+		message    sql.NullString
+		prompt     sql.NullString
+		endpoint   sql.NullString
+		authHeader sql.NullString
+		relayMode  int
+		source     sql.NullString
+		platform   sql.NullString
+		channelID  sql.NullString
+		userID     sql.NullString
+		enabled    int
+		createdAt  string
+		lastRun    sql.NullString
+		lastError  sql.NullString
 	)
 
 	err := s.Scan(
-		&job.ID, &job.Name, &job.Schedule, &tool, &argsJSON, &message, &prompt,
+		&job.ID, &job.Name, &tag, &jobType, &job.Schedule, &tool, &argsJSON, &message, &prompt,
+		&endpoint, &authHeader, &relayMode, &source,
 		&platform, &channelID, &userID, &enabled, &createdAt, &lastRun, &lastError,
 	)
 	if err != nil {
 		return nil, err
 	}
 
+	job.Tag = tag.String
+	job.Type = jobType.String
 	job.Tool = tool.String
 	job.Message = message.String
 	job.Prompt = prompt.String
+	job.Endpoint = endpoint.String
+	job.AuthHeader = authHeader.String
+	job.RelayMode = relayMode != 0
+	job.Source = source.String
 	job.Platform = platform.String
 	job.ChannelID = channelID.String
 	job.UserID = userID.String
@@ -291,4 +373,11 @@ func scanJob(s scanner) (*Job, error) {
 	}
 
 	return &job, nil
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }

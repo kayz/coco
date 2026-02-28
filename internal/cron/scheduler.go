@@ -1,10 +1,12 @@
 package cron
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -164,11 +166,30 @@ func (s *Scheduler) AddJobWithPromptAndTag(name, tag, schedule, prompt, platform
 	return s.addJob(&Job{
 		Name:      name,
 		Tag:       tag,
+		Type:      "prompt",
 		Schedule:  schedule,
 		Prompt:    prompt,
 		Platform:  platform,
 		ChannelID: channelID,
 		UserID:    userID,
+	})
+}
+
+// AddExternalJob creates a scheduled external-agent HTTP invocation job.
+func (s *Scheduler) AddExternalJob(name, tag, schedule, endpoint, authHeader string, relayMode bool, arguments map[string]any, platform, channelID, userID string) (*Job, error) {
+	return s.addJob(&Job{
+		Name:       name,
+		Tag:        tag,
+		Type:       "external",
+		Schedule:   schedule,
+		Endpoint:   endpoint,
+		AuthHeader: authHeader,
+		RelayMode:  relayMode,
+		Source:     "external-agent",
+		Arguments:  arguments,
+		Platform:   platform,
+		ChannelID:  channelID,
+		UserID:     userID,
 	})
 }
 
@@ -201,6 +222,21 @@ func (s *Scheduler) addJob(job *Job) (*Job, error) {
 	job.ID = uuid.New().String()
 	job.Enabled = true
 	job.CreatedAt = time.Now()
+	if strings.TrimSpace(job.Type) == "" {
+		switch {
+		case strings.TrimSpace(job.Endpoint) != "":
+			job.Type = "external"
+		case strings.TrimSpace(job.Prompt) != "":
+			job.Type = "prompt"
+		case strings.TrimSpace(job.Message) != "":
+			job.Type = "message"
+		default:
+			job.Type = "tool"
+		}
+	}
+	if strings.TrimSpace(job.Source) == "" && job.Type == "external" {
+		job.Source = "external-agent"
+	}
 
 	// Add to jobs map
 	s.mu.Lock()
@@ -347,6 +383,43 @@ func (s *Scheduler) scheduleJob(job *Job) error {
 func (s *Scheduler) executeJob(job *Job) {
 	now := time.Now()
 
+	// External-agent job: call external endpoint with JSON payload.
+	if job.Type == "external" || job.Endpoint != "" {
+		log.Printf("[CRON] Running external job: %s (%s) -> %s", job.ID, job.Name, job.Endpoint)
+
+		s.mu.Lock()
+		job.LastRun = &now
+		s.mu.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		text, err := s.executeExternalJob(ctx, job)
+		if err != nil {
+			s.mu.Lock()
+			job.LastError = err.Error()
+			s.mu.Unlock()
+			log.Printf("[CRON] External job failed: %s (%s) - error: %v", job.ID, job.Name, err)
+			if s.chatNotifier != nil && job.Platform != "" && job.ChannelID != "" {
+				s.chatNotifier.NotifyChatUser(job.Platform, job.ChannelID, job.UserID,
+					fmt.Sprintf("⚠️ External job '%s' failed: %v", job.Name, err))
+			}
+		} else {
+			s.mu.Lock()
+			job.LastError = ""
+			s.mu.Unlock()
+			log.Printf("[CRON] External job completed: %s (%s)", job.ID, job.Name)
+			if s.chatNotifier != nil && job.Platform != "" && job.ChannelID != "" && strings.TrimSpace(text) != "" {
+				s.chatNotifier.NotifyChatUser(job.Platform, job.ChannelID, job.UserID, text)
+			}
+		}
+
+		if err := s.store.SaveJob(job); err != nil {
+			log.Printf("[CRON] Failed to save job: %v", err)
+		}
+		return
+	}
+
 	// Message-based job: send message directly to user
 	if job.Message != "" {
 		log.Printf("[CRON] Sending message for job: %s (%s)", job.ID, job.Name)
@@ -471,6 +544,73 @@ func (s *Scheduler) executeJob(job *Job) {
 	if err := s.store.SaveJob(job); err != nil {
 		log.Printf("[CRON] Failed to save job: %v", err)
 	}
+}
+
+func (s *Scheduler) executeExternalJob(ctx context.Context, job *Job) (string, error) {
+	if strings.TrimSpace(job.Endpoint) == "" {
+		return "", fmt.Errorf("external endpoint is required")
+	}
+
+	payload := map[string]any{
+		"id":         job.ID,
+		"name":       job.Name,
+		"type":       "external",
+		"tag":        job.Tag,
+		"source":     job.Source,
+		"schedule":   job.Schedule,
+		"arguments":  job.Arguments,
+		"platform":   job.Platform,
+		"channel_id": job.ChannelID,
+		"user_id":    job.UserID,
+		"triggered":  time.Now().Format(time.RFC3339),
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, job.Endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Coco-Source", "external-agent")
+	if strings.TrimSpace(job.AuthHeader) != "" {
+		req.Header.Set("Authorization", job.AuthHeader)
+	}
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("external endpoint returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Text    string `json:"text"`
+		Message string `json:"message"`
+	}
+	decoder := json.NewDecoder(resp.Body)
+	if err := decoder.Decode(&result); err != nil {
+		// If response is not JSON, best effort return empty text.
+		return "", nil
+	}
+
+	text := strings.TrimSpace(result.Text)
+	if text == "" {
+		text = strings.TrimSpace(result.Message)
+	}
+	if text == "" {
+		return "", nil
+	}
+	if job.RelayMode {
+		return fmt.Sprintf("[external-agent] %s", text), nil
+	}
+	return text, nil
 }
 
 // countEnabled returns the number of enabled jobs

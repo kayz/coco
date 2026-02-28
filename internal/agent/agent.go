@@ -55,14 +55,20 @@ type Agent struct {
 	providerMu         sync.RWMutex
 	memory             *ConversationMemory
 	ragMemory          *RAGMemory
+	markdownMemory     *MarkdownMemory
 	sessions           *SessionStore
 	autoApprove        bool
 	customInstructions string
 	cronScheduler      *cronpkg.Scheduler
 	currentMsg         router.Message // set during HandleMessage for cron_create context
 	cronCreatedCount   int            // tracks cron_create calls per HandleMessage turn
+	securityMu         sync.RWMutex
 	pathChecker        *security.PathChecker
 	disableFileTools   bool
+	blockedCommands    []string
+	requireConfirmCmds []string
+	configPath         string
+	configMtime        time.Time
 	persistStore       *persist.Store
 	firstMessageSent   map[string]bool
 	firstMessageMu     sync.RWMutex
@@ -73,11 +79,14 @@ type Agent struct {
 
 // Config holds agent configuration
 type Config struct {
-	AutoApprove        bool     // Skip all confirmation prompts (default: false)
-	CustomInstructions string   // Additional instructions appended to system prompt (optional)
-	AllowedPaths       []string // Restrict file/shell operations to these directories (empty = no restriction)
-	DisableFileTools   bool     // Completely disable all file operation tools
-	Embedding          config.EmbeddingConfig
+	AutoApprove         bool     // Skip all confirmation prompts (default: false)
+	CustomInstructions  string   // Additional instructions appended to system prompt (optional)
+	AllowedPaths        []string // Restrict file/shell operations to these directories (empty = no restriction)
+	BlockedCommands     []string // Block command patterns for shell execution
+	RequireConfirmation []string // Shell command patterns requiring confirmation unless auto approve
+	DisableFileTools    bool     // Completely disable all file operation tools
+	Embedding           config.EmbeddingConfig
+	Memory              config.MemoryConfig
 }
 
 // loadPromptFile reads a prompt file from the project root
@@ -102,6 +111,68 @@ func loadPromptFile(filename string) string {
 	}
 
 	return ""
+}
+
+type workspacePromptFile struct {
+	name     string
+	required bool
+}
+
+var workspacePromptOrder = []workspacePromptFile{
+	{name: "AGENTS.md", required: true},
+	{name: "SOUL.md", required: true},
+	{name: "PROFILE.md", required: false},
+	{name: "MEMORY.md", required: false},
+	{name: "HEARTBEAT.md", required: false},
+}
+
+func getWorkspaceDir() string {
+	if env := strings.TrimSpace(os.Getenv("COCO_WORKSPACE_DIR")); env != "" {
+		return env
+	}
+	if exeDir := getExecutableDir(); exeDir != "" {
+		return exeDir
+	}
+	return "."
+}
+
+func stripYAMLFrontmatter(content string) string {
+	content = strings.TrimSpace(content)
+	if !strings.HasPrefix(content, "---") {
+		return content
+	}
+	parts := strings.SplitN(content, "---", 3)
+	if len(parts) < 3 {
+		return content
+	}
+	return strings.TrimSpace(parts[2])
+}
+
+func loadWorkspacePromptBundle() string {
+	workspaceDir := getWorkspaceDir()
+	var sections []string
+
+	for _, file := range workspacePromptOrder {
+		path := filepath.Join(workspaceDir, file.name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if file.required {
+				return ""
+			}
+			continue
+		}
+
+		content := stripYAMLFrontmatter(string(data))
+		if strings.TrimSpace(content) == "" {
+			if file.required {
+				return ""
+			}
+			continue
+		}
+		sections = append(sections, fmt.Sprintf("# %s\n\n%s", file.name, content))
+	}
+
+	return strings.TrimSpace(strings.Join(sections, "\n\n"))
 }
 
 // ConversationKey generates a unique key for a conversation
@@ -337,14 +408,24 @@ func New(cfg Config) (*Agent, error) {
 		log.Printf("[AGENT] Failed to initialize search manager: %v", err)
 	}
 
+	effectiveEmbedding := configCfg.Embedding
+	if cfg.Embedding.Enabled || cfg.Embedding.APIKey != "" || cfg.Embedding.Provider != "" || cfg.Embedding.Model != "" || cfg.Embedding.BaseURL != "" {
+		effectiveEmbedding = cfg.Embedding
+	}
+
 	var ragMemory *RAGMemory
-	if cfg.Embedding.Enabled {
-		ragMemory, err = NewRAGMemory(cfg.Embedding)
+	if effectiveEmbedding.Enabled {
+		ragMemory, err = NewRAGMemory(effectiveEmbedding)
 		if err != nil {
 			log.Printf("[AGENT] Failed to initialize RAG memory: %v", err)
 		}
 	} else {
 		ragMemory = &RAGMemory{enabled: false}
+	}
+
+	markdownMemory := NewMarkdownMemory(configCfg.Memory)
+	if err := markdownMemory.EnableSemanticSearch(effectiveEmbedding); err != nil {
+		log.Printf("[AGENT] Markdown semantic search disabled: %v", err)
 	}
 
 	agent := &Agent{
@@ -353,20 +434,118 @@ func New(cfg Config) (*Agent, error) {
 		providerCache:      make(map[string]Provider),
 		memory:             memory,
 		ragMemory:          ragMemory,
+		markdownMemory:     markdownMemory,
 		sessions:           NewSessionStore(),
 		autoApprove:        cfg.AutoApprove,
 		customInstructions: cfg.CustomInstructions,
-		pathChecker:        security.NewPathChecker(cfg.AllowedPaths),
-		disableFileTools:   cfg.DisableFileTools,
+		configPath:         config.ConfigPath(),
 		persistStore:       persistStore,
 		firstMessageSent:   make(map[string]bool),
 		searchRegistry:     searchRegistry,
 		searchManager:      searchManager,
 	}
+	agent.applySecurityConfig(
+		cfg.AllowedPaths,
+		cfg.DisableFileTools,
+		cfg.BlockedCommands,
+		cfg.RequireConfirmation,
+	)
+	agent.refreshRuntimeSecurityConfig()
 
 	agent.initializeDailyReport()
 
 	return agent, nil
+}
+
+type runtimeSecuritySnapshot struct {
+	pathChecker        *security.PathChecker
+	disableFileTools   bool
+	blockedCommands    []string
+	requireConfirmCmds []string
+}
+
+func (a *Agent) applySecurityConfig(allowedPaths []string, disableFileTools bool, blockedCommands []string, requireConfirmation []string) {
+	blocked := security.NormalizeCommandPatterns(blockedCommands, security.DefaultBlockedCommandPatterns)
+	requireConfirm := security.NormalizeCommandPatterns(requireConfirmation, nil)
+
+	a.securityMu.Lock()
+	defer a.securityMu.Unlock()
+
+	a.pathChecker = security.NewPathChecker(allowedPaths)
+	a.disableFileTools = disableFileTools
+	a.blockedCommands = blocked
+	a.requireConfirmCmds = requireConfirm
+}
+
+func (a *Agent) refreshRuntimeSecurityConfig() {
+	if strings.TrimSpace(a.configPath) == "" {
+		return
+	}
+
+	info, err := os.Stat(a.configPath)
+	if err != nil {
+		return
+	}
+
+	a.securityMu.RLock()
+	unchanged := !info.ModTime().After(a.configMtime)
+	a.securityMu.RUnlock()
+	if unchanged {
+		return
+	}
+
+	cfg, err := config.LoadFromPath(a.configPath)
+	if err != nil {
+		logger.Warn("[Agent] Failed to reload runtime config: %v", err)
+		return
+	}
+
+	a.applySecurityConfig(
+		cfg.Security.AllowedPaths,
+		cfg.Security.DisableFileTools,
+		cfg.Security.BlockedCommands,
+		cfg.Security.RequireConfirmation,
+	)
+
+	a.securityMu.Lock()
+	a.configMtime = info.ModTime()
+	a.securityMu.Unlock()
+	logger.Info("[Agent] Reloaded security config from %s", a.configPath)
+}
+
+func (a *Agent) securitySnapshot() runtimeSecuritySnapshot {
+	a.securityMu.RLock()
+	defer a.securityMu.RUnlock()
+
+	snapshot := runtimeSecuritySnapshot{
+		pathChecker:      a.pathChecker,
+		disableFileTools: a.disableFileTools,
+	}
+	if len(a.blockedCommands) > 0 {
+		snapshot.blockedCommands = append([]string(nil), a.blockedCommands...)
+	}
+	if len(a.requireConfirmCmds) > 0 {
+		snapshot.requireConfirmCmds = append([]string(nil), a.requireConfirmCmds...)
+	}
+	return snapshot
+}
+
+func (a *Agent) validateShellCommand(command string) string {
+	snapshot := a.securitySnapshot()
+
+	if matched, ok := security.MatchCommandPattern(command, snapshot.blockedCommands); ok {
+		logger.Warn("[Agent] Shell command blocked by policy: %s", matched)
+		return fmt.Sprintf("ACCESS DENIED: command blocked by security policy (matched %q). Do NOT retry.", matched)
+	}
+
+	if !a.autoApprove {
+		if matched, ok := security.MatchCommandPattern(command, snapshot.requireConfirmCmds); ok {
+			logger.Info("[Agent] Shell command requires confirmation: %s", matched)
+			return fmt.Sprintf("CONFIRMATION REQUIRED: command matches security.require_confirmation pattern %q. Re-run with --yes or adjust config before retrying.", matched)
+		}
+	}
+
+	return ""
 }
 
 // initializeDailyReport initializes the daily report functionality
@@ -654,8 +833,310 @@ func (a *Agent) ExecutePrompt(ctx context.Context, platform, channelID, userID, 
 	return resp.Text, nil
 }
 
+type orchestrationPlan struct {
+	NeedClarification  bool     `json:"need_clarification"`
+	ClarifyingQuestion string   `json:"clarifying_question"`
+	MemoryQueries      []string `json:"memory_queries"`
+	FinalInstruction   string   `json:"final_instruction"`
+	TaskComplexity     string   `json:"task_complexity"` // simple | normal | complex
+}
+
+func isTwoStageOrchestrationEnabled() bool {
+	raw := strings.TrimSpace(os.Getenv("COCO_AGENT_ORCHESTRATION_ENABLE"))
+	if raw == "" {
+		return true
+	}
+	raw = strings.ToLower(raw)
+	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
+}
+
+func (a *Agent) planOrchestration(ctx context.Context, userInput string, memoryRecall string) (*orchestrationPlan, error) {
+	if a.modelRouter == nil {
+		return nil, fmt.Errorf("model router not initialized")
+	}
+
+	plannerModel := a.selectPlannerModel()
+	restore := a.switchModelTemporarily(plannerModel)
+	defer restore()
+
+	systemPrompt := `You are a response orchestration planner.
+Output STRICT JSON only with keys:
+- need_clarification (boolean)
+- clarifying_question (string)
+- memory_queries (array of strings, max 3)
+- final_instruction (string, concise)
+- task_complexity (simple|normal|complex)
+
+Rules:
+1. Ask clarification only when critical information is missing and cannot be inferred.
+2. memory_queries should target retrieval intent, not full sentences.
+3. final_instruction must describe how the final model should answer.
+4. Never include markdown or extra commentary.`
+
+	recall := strings.TrimSpace(memoryRecall)
+	if len(recall) > 2200 {
+		recall = recall[:2200] + "\n...[truncated]"
+	}
+	userPrompt := fmt.Sprintf("User input:\n%s\n\nKnown memory snippet:\n%s", strings.TrimSpace(userInput), recall)
+
+	resp, err := a.chatWithModel(ctx, ChatRequest{
+		Messages: []Message{
+			{Role: "user", Content: userPrompt},
+		},
+		SystemPrompt: systemPrompt,
+		Tools:        nil,
+		MaxTokens:    600,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	jsonPayload := extractJSONObject(strings.TrimSpace(resp.Content))
+	if jsonPayload == "" {
+		return nil, fmt.Errorf("planner returned non-json content")
+	}
+
+	var plan orchestrationPlan
+	if err := json.Unmarshal([]byte(jsonPayload), &plan); err != nil {
+		return nil, fmt.Errorf("invalid planner json: %w", err)
+	}
+
+	plan.ClarifyingQuestion = strings.TrimSpace(plan.ClarifyingQuestion)
+	plan.FinalInstruction = strings.TrimSpace(plan.FinalInstruction)
+	plan.TaskComplexity = normalizeTaskComplexity(plan.TaskComplexity)
+	plan.MemoryQueries = normalizeMemoryQueries(plan.MemoryQueries, 3)
+
+	return &plan, nil
+}
+
+func (a *Agent) appendPlannerMemoryRecall(ctx context.Context, queries []string, memoryRecallForPromptBuild *strings.Builder, markdownMemoriesSection *string) {
+	if a.markdownMemory == nil || !a.markdownMemory.IsEnabled() || len(queries) == 0 {
+		return
+	}
+
+	seenPath := map[string]bool{}
+	var lines []string
+	for _, q := range queries {
+		hits, err := a.markdownMemory.Search(ctx, q, 3)
+		if err != nil {
+			logger.Warn("[Agent] planner memory search failed for %q: %v", q, err)
+			continue
+		}
+		for _, h := range hits {
+			if seenPath[h.Path] {
+				continue
+			}
+			seenPath[h.Path] = true
+			lines = append(lines, fmt.Sprintf("- [%s] %s (updated: %s)\n  %s",
+				h.Source, h.Path, h.ModifiedAt.Format("2006-01-02 15:04"), h.Content))
+			if len(lines) >= 8 {
+				break
+			}
+		}
+		if len(lines) >= 8 {
+			break
+		}
+	}
+
+	if len(lines) == 0 {
+		return
+	}
+
+	section := "\n\n## Planner Memory Recall\n" + strings.Join(lines, "\n")
+	if markdownMemoriesSection != nil {
+		*markdownMemoriesSection += section
+	}
+	if memoryRecallForPromptBuild != nil {
+		if memoryRecallForPromptBuild.Len() > 0 {
+			memoryRecallForPromptBuild.WriteString("\n\n")
+		}
+		memoryRecallForPromptBuild.WriteString(strings.TrimSpace(section))
+	}
+}
+
+func normalizeMemoryQueries(in []string, max int) []string {
+	if max <= 0 {
+		max = 3
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, max)
+	for _, q := range in {
+		q = strings.TrimSpace(q)
+		if len([]rune(q)) < 2 {
+			continue
+		}
+		key := strings.ToLower(q)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, q)
+		if len(out) >= max {
+			break
+		}
+	}
+	return out
+}
+
+func normalizeTaskComplexity(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch v {
+	case "simple", "normal", "complex":
+		return v
+	default:
+		return "normal"
+	}
+}
+
+func extractJSONObject(content string) string {
+	start := strings.Index(content, "{")
+	end := strings.LastIndex(content, "}")
+	if start < 0 || end <= start {
+		return ""
+	}
+	return strings.TrimSpace(content[start : end+1])
+}
+
+func hasSkill(m *ai.ModelConfig, skill string) bool {
+	if m == nil {
+		return false
+	}
+	for _, s := range m.Skills {
+		if strings.EqualFold(strings.TrimSpace(s), skill) {
+			return true
+		}
+	}
+	return false
+}
+
+func speedRank(speed string) int {
+	switch strings.ToLower(strings.TrimSpace(speed)) {
+	case "fast":
+		return 3
+	case "medium":
+		return 2
+	case "slow":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func (a *Agent) selectPlannerModel() *ai.ModelConfig {
+	models := a.modelRouter.ListModels()
+	if len(models) == 0 {
+		return nil
+	}
+	best := models[0]
+	bestScore := -1
+	for _, m := range models {
+		score := speedRank(m.Speed)*100 + m.IntellectRank()*10
+		if hasSkill(m, "thinking") {
+			score += 2
+		}
+		if score > bestScore {
+			best = m
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func (a *Agent) selectFinalModel(complexity string) *ai.ModelConfig {
+	models := a.modelRouter.ListModels()
+	if len(models) == 0 {
+		return nil
+	}
+
+	best := models[0]
+	bestScore := -1
+	for _, m := range models {
+		score := m.IntellectRank() * 100
+		if hasSkill(m, "thinking") {
+			score += 25
+		}
+		switch complexity {
+		case "simple":
+			score += speedRank(m.Speed) * 8
+		case "complex":
+			score += m.IntellectRank() * 10
+		default:
+			score += speedRank(m.Speed) * 3
+		}
+		if score > bestScore {
+			best = m
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func (a *Agent) switchModelTemporarily(target *ai.ModelConfig) func() {
+	if target == nil || a.modelRouter == nil {
+		return func() {}
+	}
+
+	current := a.modelRouter.GetCurrentModel()
+	if current != nil && current.Name == target.Name {
+		return func() {}
+	}
+
+	var previous string
+	if current != nil {
+		previous = current.Name
+	}
+
+	if err := a.modelRouter.SwitchToModel(target.Name, true); err != nil {
+		logger.Warn("[Agent] failed to switch to model %s: %v", target.Name, err)
+		return func() {}
+	}
+	logger.Debug("[Agent] temporary model switch: %s", target.Name)
+
+	return func() {
+		if previous == "" {
+			return
+		}
+		if err := a.modelRouter.SwitchToModel(previous, true); err != nil {
+			logger.Warn("[Agent] failed to restore model %s: %v", previous, err)
+		}
+	}
+}
+
+func (a *Agent) persistTurnAndLongMemory(ctx context.Context, convKey string, msg router.Message, assistantText string) {
+	a.memory.AddExchange(convKey,
+		Message{Role: "user", Content: msg.Text},
+		Message{Role: "assistant", Content: assistantText},
+	)
+
+	if a.ragMemory != nil && a.ragMemory.IsEnabled() {
+		conversationText := fmt.Sprintf("User: %s\nAssistant: %s", msg.Text, assistantText)
+		err := a.ragMemory.AddMemory(ctx, MemoryItem{
+			ID:      fmt.Sprintf("conv-%s-%d", convKey, time.Now().Unix()),
+			Type:    "conversation",
+			Content: conversationText,
+			Metadata: map[string]string{
+				"platform":  msg.Platform,
+				"channel":   msg.ChannelID,
+				"user":      msg.UserID,
+				"timestamp": time.Now().Format(time.RFC3339),
+			},
+		})
+		if err != nil {
+			logger.Warn("[Agent] Failed to save conversation to RAG memory: %v", err)
+		} else {
+			logger.Debug("[Agent] Conversation saved to RAG memory")
+		}
+
+		history := a.memory.GetHistory(convKey)
+		if len(history) > 0 && len(history)%4 == 0 {
+			a.learnUserPreferences(ctx, convKey, msg)
+		}
+	}
+}
+
 // HandleMessage processes a message and returns a response
 func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.Response, error) {
+	a.refreshRuntimeSecurityConfig()
 	a.currentMsg = msg
 	a.cronCreatedCount = 0
 	logger.Info("[Agent] Processing message from %s: %s (model: %s)", msg.Username, msg.Text, a.currentModelName())
@@ -713,15 +1194,35 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 	// Load prompt files
 	aboutMe := loadPromptFile("ABOUTME.md")
 	systemContent := loadPromptFile("SYSTEM.md")
+	workspacePromptBundle := loadWorkspacePromptBundle()
 
 	// Fallback to default if files not found
 	if aboutMe == "" {
 		aboutMe = "You are coco, a helpful AI assistant running on the user's computer."
 	}
 
-	// Retrieve relevant memories from RAG if enabled
+	// Retrieve relevant memories from markdown + RAG if enabled
+	var markdownMemoriesSection string
 	var memoriesSection string
 	var preferencesSection string
+	var memoryRecallForPromptBuild strings.Builder
+	if a.markdownMemory != nil && a.markdownMemory.IsEnabled() {
+		markdownMemories, err := a.markdownMemory.Search(ctx, msg.Text, 6)
+		if err != nil {
+			logger.Warn("[Agent] Failed to search markdown memories: %v", err)
+		} else if len(markdownMemories) > 0 {
+			markdownMemoriesSection = "\n\n## Markdown Memories\nHere are recent and relevant notes from local markdown memory:\n"
+			for i, mem := range markdownMemories {
+				modified := mem.ModifiedAt.Format("2006-01-02 15:04")
+				markdownMemoriesSection += fmt.Sprintf("%d. [%s] %s (updated: %s)\n%s\n\n",
+					i+1, mem.Source, mem.Path, modified, mem.Content)
+			}
+			memoryRecallForPromptBuild.WriteString("## Markdown Memories\n")
+			memoryRecallForPromptBuild.WriteString(strings.TrimSpace(markdownMemoriesSection))
+			logger.Debug("[Agent] Retrieved %d markdown memories", len(markdownMemories))
+		}
+	}
+
 	if a.ragMemory != nil && a.ragMemory.IsEnabled() {
 		memories, err := a.ragMemory.SearchMemories(ctx, msg.Text, 5)
 		if err == nil && len(memories) > 0 {
@@ -729,6 +1230,10 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 			for i, mem := range memories {
 				memoriesSection += fmt.Sprintf("%d. [%s] %s\n", i+1, mem.Type, mem.Content)
 			}
+			if memoryRecallForPromptBuild.Len() > 0 {
+				memoryRecallForPromptBuild.WriteString("\n\n")
+			}
+			memoryRecallForPromptBuild.WriteString(strings.TrimSpace(memoriesSection))
 			logger.Debug("[Agent] Retrieved %d relevant memories", len(memories))
 		}
 
@@ -741,7 +1246,35 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 					preferencesSection += fmt.Sprintf("%d. %s\n", i+1, pref.Content)
 				}
 			}
+			if strings.TrimSpace(preferencesSection) != "" {
+				if memoryRecallForPromptBuild.Len() > 0 {
+					memoryRecallForPromptBuild.WriteString("\n\n")
+				}
+				memoryRecallForPromptBuild.WriteString(strings.TrimSpace(preferencesSection))
+			}
 			logger.Debug("[Agent] Retrieved %d user preferences", len(preferences))
+		}
+	}
+
+	plannerInstruction := ""
+	taskComplexity := "normal"
+	if isTwoStageOrchestrationEnabled() {
+		plan, err := a.planOrchestration(ctx, msg.Text, strings.TrimSpace(memoryRecallForPromptBuild.String()))
+		if err != nil {
+			logger.Warn("[Agent] orchestration planner failed, fallback single-stage: %v", err)
+		} else if plan != nil {
+			taskComplexity = normalizeTaskComplexity(plan.TaskComplexity)
+			plannerInstruction = strings.TrimSpace(plan.FinalInstruction)
+			if len(plan.MemoryQueries) > 0 {
+				a.appendPlannerMemoryRecall(ctx, plan.MemoryQueries, &memoryRecallForPromptBuild, &markdownMemoriesSection)
+			}
+
+			if plan.NeedClarification && strings.TrimSpace(plan.ClarifyingQuestion) != "" {
+				clarify := strings.TrimSpace(plan.ClarifyingQuestion)
+				a.persistTurnAndLongMemory(ctx, convKey, msg, clarify)
+				a.isFirstMessage(convKey)
+				return router.Response{Text: clarify}, nil
+			}
 		}
 	}
 
@@ -877,6 +1410,14 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 		systemPrompt += formatSkillsSection()
 	}
 
+	if workspacePromptBundle != "" {
+		systemPrompt = workspacePromptBundle + "\n\n" + systemPrompt
+	}
+
+	if markdownMemoriesSection != "" {
+		systemPrompt += markdownMemoriesSection
+	}
+
 	if memoriesSection != "" {
 		systemPrompt += memoriesSection
 	}
@@ -894,12 +1435,23 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 	// Optional promptbuild integration (disabled by default).
 	// When enabled, any failure falls back to legacy system prompt behavior.
 	if isPromptBuildEnabled() {
-		if pbPrompt, used, err := a.buildPromptWithPromptBuild(msg, thinkingPrompt, a.getReportNotification()); err != nil {
+		if pbPrompt, used, err := a.buildPromptWithPromptBuild(msg, thinkingPrompt, a.getReportNotification(), strings.TrimSpace(memoryRecallForPromptBuild.String()), plannerInstruction); err != nil {
 			logger.Warn("[Agent] promptbuild failed, fallback to legacy prompt: %v", err)
 		} else if used {
 			systemPrompt = pbPrompt + "\n\n" + systemPrompt
 		}
 	}
+
+	if plannerInstruction != "" {
+		systemPrompt += "\n\n## Planner Instruction\n" + plannerInstruction
+	}
+
+	restoreFinalModel := func() {}
+	if isTwoStageOrchestrationEnabled() {
+		finalModel := a.selectFinalModel(taskComplexity)
+		restoreFinalModel = a.switchModelTemporarily(finalModel)
+	}
+	defer restoreFinalModel()
 
 	// Call AI provider
 	resp, err := a.chatWithModel(ctx, ChatRequest{
@@ -969,38 +1521,7 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 		logger.Warn("[Agent] Tool loop hit max rounds (%d), forcing stop (user: %s)", maxToolRounds, msg.Username)
 	}
 
-	// Save conversation to memory
-	a.memory.AddExchange(convKey,
-		Message{Role: "user", Content: msg.Text},
-		Message{Role: "assistant", Content: resp.Content},
-	)
-
-	// Save conversation to RAG memory for long-term recall
-	if a.ragMemory != nil && a.ragMemory.IsEnabled() {
-		conversationText := fmt.Sprintf("User: %s\nAssistant: %s", msg.Text, resp.Content)
-		err := a.ragMemory.AddMemory(ctx, MemoryItem{
-			ID:      fmt.Sprintf("conv-%s-%d", convKey, time.Now().Unix()),
-			Type:    "conversation",
-			Content: conversationText,
-			Metadata: map[string]string{
-				"platform":  msg.Platform,
-				"channel":   msg.ChannelID,
-				"user":      msg.UserID,
-				"timestamp": time.Now().Format(time.RFC3339),
-			},
-		})
-		if err != nil {
-			logger.Warn("[Agent] Failed to save conversation to RAG memory: %v", err)
-		} else {
-			logger.Debug("[Agent] Conversation saved to RAG memory")
-		}
-
-		// Extract and learn user preferences (every 5th conversation)
-		history := a.memory.GetHistory(convKey)
-		if len(history) > 0 && len(history)%4 == 0 {
-			a.learnUserPreferences(ctx, convKey, msg)
-		}
-	}
+	a.persistTurnAndLongMemory(ctx, convKey, msg, resp.Content)
 
 	// Track first message (reserved for future use)
 	a.isFirstMessage(convKey)
@@ -1011,7 +1532,7 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 	return router.Response{Text: resp.Content, Files: pendingFiles}, nil
 }
 
-func (a *Agent) buildPromptWithPromptBuild(msg router.Message, thinkingPrompt string, reportNotification string) (string, bool, error) {
+func (a *Agent) buildPromptWithPromptBuild(msg router.Message, thinkingPrompt string, reportNotification string, memoryRecall string, plannerInstruction string) (string, bool, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return "", false, err
@@ -1019,6 +1540,7 @@ func (a *Agent) buildPromptWithPromptBuild(msg router.Message, thinkingPrompt st
 
 	builder := promptbuild.NewBuilder(cfg.PromptBuild)
 	req := promptbuild.BuildRequest{
+		Agent:        "coco",
 		Requirements: "Handle this user request safely and helpfully.",
 		UserInput:    msg.Text,
 		History: promptbuild.HistorySpec{
@@ -1030,6 +1552,8 @@ func (a *Agent) buildPromptWithPromptBuild(msg router.Message, thinkingPrompt st
 		Inputs: map[string]string{
 			"thinking_prompt":     thinkingPrompt,
 			"report_notification": reportNotification,
+			"memory_recall":       memoryRecall,
+			"planner_instruction": plannerInstruction,
 		},
 	}
 
@@ -1181,6 +1705,29 @@ func (a *Agent) buildToolsList() []Tool {
 			InputSchema: jsonSchema(map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
+			}),
+		},
+		{
+			Name:        "memory_search",
+			Description: "搜索本地 Markdown 长程记忆（含 Obsidian 与核心记忆文件），按相关性和更新时间排序",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]string{"type": "string", "description": "搜索关键词或问题"},
+					"limit": map[string]string{"type": "number", "description": "返回条目数（默认 6）"},
+				},
+				"required": []string{"query"},
+			}),
+		},
+		{
+			Name:        "memory_get",
+			Description: "读取单个 Markdown 记忆文件完整内容（仅允许 Obsidian vault 和核心记忆文件）",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]string{"type": "string", "description": "文件路径（绝对路径或 vault 内相对路径）"},
+				},
+				"required": []string{"path"},
 			}),
 		},
 		// === FILE OPERATIONS ===
@@ -1776,12 +2323,16 @@ func (a *Agent) buildToolsList() []Tool {
 			InputSchema: jsonSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"name":      map[string]string{"type": "string", "description": "Human-readable task name"},
-					"schedule":  map[string]string{"type": "string", "description": "Cron expression (5-field: minute hour day month weekday). Examples: '0 9 * * *' (daily 9am), '0 9 * * 1-5' (weekdays 9am), '30 8 * * 1' (Monday 8:30am), '0 */2 * * *' (every 2 hours)"},
-					"tag":       map[string]string{"type": "string", "description": "Task tag: 'user-schedule' for user's personal schedule/reminders, 'assistant-task' for assistant's background tasks. Use 'user-schedule' when creating calendar/events/reminders for the user."},
-					"prompt":    map[string]string{"type": "string", "description": "What the AI should do each time this job triggers. AI runs a full conversation and sends the result to the user. Example: '生成一条独特的编程激励鸡汤，鼓励用户写代码创造新产品'"},
-					"tool":      map[string]string{"type": "string", "description": "MCP tool to execute periodically (for raw tool execution without AI)"},
-					"arguments": map[string]string{"type": "object", "description": "Arguments for the tool (when using tool parameter)"},
+					"name":       map[string]string{"type": "string", "description": "Human-readable task name"},
+					"schedule":   map[string]string{"type": "string", "description": "Cron expression (5-field: minute hour day month weekday). Examples: '0 9 * * *' (daily 9am), '0 9 * * 1-5' (weekdays 9am), '30 8 * * 1' (Monday 8:30am), '0 */2 * * *' (every 2 hours)"},
+					"tag":        map[string]string{"type": "string", "description": "Task tag: 'user-schedule' for user's personal schedule/reminders, 'assistant-task' for assistant's background tasks. Use 'user-schedule' when creating calendar/events/reminders for the user."},
+					"prompt":     map[string]string{"type": "string", "description": "What the AI should do each time this job triggers. AI runs a full conversation and sends the result to the user. Example: '生成一条独特的编程激励鸡汤，鼓励用户写代码创造新产品'"},
+					"tool":       map[string]string{"type": "string", "description": "MCP tool to execute periodically (for raw tool execution without AI)"},
+					"type":       map[string]string{"type": "string", "description": "Optional job type. Use 'external' for external agent endpoint jobs."},
+					"endpoint":   map[string]string{"type": "string", "description": "External agent endpoint URL (required when type='external')."},
+					"auth":       map[string]string{"type": "string", "description": "Optional HTTP Authorization header value for external jobs (example: 'Bearer xxx')."},
+					"relay_mode": map[string]string{"type": "boolean", "description": "When true, treat external output as pass-through forwarded content."},
+					"arguments":  map[string]string{"type": "object", "description": "Arguments for the tool (when using tool parameter)"},
 				},
 				"required": []string{"name", "schedule"},
 			}),
@@ -1821,6 +2372,20 @@ func (a *Agent) buildToolsList() []Tool {
 				"type":       "object",
 				"properties": map[string]any{"id": map[string]string{"type": "string", "description": "Task ID to resume"}},
 				"required":   []string{"id"},
+			}),
+		},
+		{
+			Name:        "spawn_agent",
+			Description: "Invoke an external agent endpoint via HTTP POST and optionally relay its response.",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"endpoint": map[string]string{"type": "string", "description": "External agent endpoint URL"},
+					"prompt":   map[string]string{"type": "string", "description": "Task prompt for external agent"},
+					"auth":     map[string]string{"type": "string", "description": "Optional Authorization header value, e.g. 'Bearer xxx'"},
+					"timeout":  map[string]string{"type": "number", "description": "Optional timeout in seconds (default: 60)"},
+				},
+				"required": []string{"endpoint", "prompt"},
 			}),
 		},
 	}
@@ -1897,19 +2462,40 @@ func (a *Agent) executeTool(ctx context.Context, name string, input json.RawMess
 		return a.executeSearchMessages(args)
 	case "get_conversation_summary":
 		return a.executeGetConversationSummary(args)
+	case "memory_search":
+		return a.executeMemorySearch(ctx, args)
+	case "memory_get":
+		return a.executeMemoryGet(args)
+	case "spawn_agent":
+		return a.executeSpawnAgent(ctx, args)
 	}
 
+	securitySnapshot := a.securitySnapshot()
+
 	// Block file tools entirely if disabled
-	if a.disableFileTools {
+	if securitySnapshot.disableFileTools {
 		if _, ok := fileToolPaths[name]; ok {
 			return "ACCESS DENIED: file operations are disabled by security policy. Do NOT retry. Inform the user that file access is disabled."
 		}
 	}
 
 	// Enforce allowed_paths restrictions
-	if a.pathChecker.HasRestrictions() {
-		if err := a.checkToolPathAccess(name, args); err != nil {
+	if securitySnapshot.pathChecker != nil && securitySnapshot.pathChecker.HasRestrictions() {
+		if err := a.checkToolPathAccess(name, args, securitySnapshot.pathChecker); err != nil {
 			return err.Error()
+		}
+	}
+
+	if name == "shell_execute" {
+		cmd := ""
+		if c, ok := args["command"].(string); ok {
+			cmd = strings.TrimSpace(c)
+		}
+		if cmd == "" {
+			return "Error: command is required"
+		}
+		if msg := a.validateShellCommand(cmd); msg != "" {
+			return msg
 		}
 	}
 
@@ -1938,17 +2524,17 @@ var fileToolPaths = map[string]string{
 }
 
 // checkToolPathAccess validates that tool arguments respect allowed_paths.
-func (a *Agent) checkToolPathAccess(name string, args map[string]any) error {
+func (a *Agent) checkToolPathAccess(name string, args map[string]any, checker *security.PathChecker) error {
 	if pathKey, ok := fileToolPaths[name]; ok {
 		path := "."
 		if p, ok := args[pathKey].(string); ok && p != "" {
 			path = p
 		}
-		return a.pathChecker.CheckPath(path)
+		return checker.CheckPath(path)
 	}
 	if name == "shell_execute" {
 		if wd, ok := args["working_directory"].(string); ok && wd != "" {
-			return a.pathChecker.CheckPath(wd)
+			return checker.CheckPath(wd)
 		}
 	}
 	return nil
@@ -2429,6 +3015,85 @@ func (a *Agent) executeGetConversationSummary(args map[string]any) string {
 	result += fmt.Sprintf("- %s", summary)
 
 	return result
+}
+
+func (a *Agent) executeMemorySearch(ctx context.Context, args map[string]any) string {
+	if a.markdownMemory == nil || !a.markdownMemory.IsEnabled() {
+		return "Error: markdown memory is disabled. Please configure memory.enabled and memory.obsidian_vault in ~/.coco.yaml"
+	}
+
+	query, _ := args["query"].(string)
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "Error: query is required"
+	}
+
+	limit := 6
+	if v, ok := args["limit"].(float64); ok {
+		limit = int(v)
+	}
+	if limit <= 0 {
+		limit = 6
+	}
+
+	results, err := a.markdownMemory.Search(ctx, query, limit)
+	if err != nil {
+		return fmt.Sprintf("Error searching markdown memory: %v", err)
+	}
+	if len(results) == 0 {
+		return fmt.Sprintf("No markdown memories found for query: %s", query)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("🧠 Markdown memory results (%s):\n\n", query))
+	for i, r := range results {
+		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, r.Path))
+		sb.WriteString(fmt.Sprintf("   - source: %s\n", r.Source))
+		sb.WriteString(fmt.Sprintf("   - updated: %s\n", r.ModifiedAt.Format("2006-01-02 15:04")))
+		sb.WriteString(fmt.Sprintf("   - score: %.2f\n", r.Score))
+		if r.Title != "" {
+			sb.WriteString(fmt.Sprintf("   - title: %s\n", r.Title))
+		}
+		if r.Content != "" {
+			sb.WriteString(fmt.Sprintf("   - excerpt: %s\n", r.Content))
+		}
+		sb.WriteString("\n")
+		if sb.Len() > 7000 {
+			sb.WriteString("... (truncated)")
+			break
+		}
+	}
+
+	return strings.TrimSpace(sb.String())
+}
+
+func (a *Agent) executeMemoryGet(args map[string]any) string {
+	if a.markdownMemory == nil || !a.markdownMemory.IsEnabled() {
+		return "Error: markdown memory is disabled. Please configure memory.enabled and memory.obsidian_vault in ~/.coco.yaml"
+	}
+
+	path, _ := args["path"].(string)
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "Error: path is required"
+	}
+
+	result, err := a.markdownMemory.Get(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Sprintf("Memory file not found: %s", path)
+		}
+		return fmt.Sprintf("Error reading markdown memory: %v", err)
+	}
+
+	content := result.Content
+	if len(content) > 12000 {
+		content = content[:12000] + "\n\n... (truncated)"
+	}
+
+	header := fmt.Sprintf("📄 Memory file: %s\nsource: %s\nupdated: %s\n\n",
+		result.Path, result.Source, result.ModifiedAt.Format("2006-01-02 15:04"))
+	return header + content
 }
 
 func getString(m map[string]any, key string) string {

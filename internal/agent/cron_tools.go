@@ -26,6 +26,9 @@ func (a *Agent) executeCronCreate(args map[string]any) string {
 	tool, _ := args["tool"].(string)
 	prompt, _ := args["prompt"].(string)
 	tag, _ := args["tag"].(string)
+	jobType, _ := args["type"].(string)
+	endpoint, _ := args["endpoint"].(string)
+	authHeader, _ := args["auth"].(string)
 
 	if name == "" {
 		return "Error: name is required"
@@ -61,6 +64,31 @@ func (a *Agent) executeCronCreate(args map[string]any) string {
 			return fmt.Sprintf("Error creating scheduled task: %v", err)
 		}
 		return fmt.Sprintf("Scheduled AI task created:\n- ID: %s\n- Name: %s\n- Schedule: %s\n- Tag: %s\n- Prompt: %s", job.ID, job.Name, job.Schedule, job.Tag, job.Prompt)
+	}
+
+	// External-agent job
+	if strings.EqualFold(strings.TrimSpace(jobType), "external") || strings.TrimSpace(endpoint) != "" {
+		if strings.TrimSpace(endpoint) == "" {
+			return "Error: endpoint is required when type is 'external'"
+		}
+		relayMode := false
+		if v, ok := args["relay_mode"].(bool); ok {
+			relayMode = v
+		}
+		var arguments map[string]any
+		if rawArgs, ok := args["arguments"]; ok {
+			if m, ok := rawArgs.(map[string]any); ok {
+				arguments = m
+			}
+		}
+		job, err = a.cronScheduler.AddExternalJob(
+			name, tag, schedule, endpoint, authHeader, relayMode, arguments,
+			a.currentMsg.Platform, a.currentMsg.ChannelID, a.currentMsg.UserID,
+		)
+		if err != nil {
+			return fmt.Sprintf("Error creating external scheduled task: %v", err)
+		}
+		return fmt.Sprintf("External scheduled task created:\n- ID: %s\n- Name: %s\n- Schedule: %s\n- Tag: %s\n- Endpoint: %s\n- Relay mode: %t", job.ID, job.Name, job.Schedule, job.Tag, job.Endpoint, job.RelayMode)
 	}
 
 	// Message-based job
@@ -118,13 +146,13 @@ func (a *Agent) executeCronList(args map[string]any) string {
 
 	var jobs []*cronpkg.Job
 	tag, _ := args["tag"].(string)
-	
+
 	if tag != "" {
 		jobs = a.cronScheduler.ListJobsByTag(tag)
 	} else {
 		jobs = a.cronScheduler.ListJobs()
 	}
-	
+
 	if len(jobs) == 0 {
 		if tag != "" {
 			return fmt.Sprintf("No scheduled tasks with tag '%s'.", tag)
@@ -138,7 +166,7 @@ func (a *Agent) executeCronList(args map[string]any) string {
 	} else {
 		sb.WriteString(fmt.Sprintf("Scheduled tasks (%d):\n\n", len(jobs)))
 	}
-	
+
 	for _, job := range jobs {
 		status := "enabled"
 		if !job.Enabled {
