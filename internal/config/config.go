@@ -37,6 +37,7 @@ type Config struct {
 	Logging       LoggingConfig     `yaml:"logging"`
 	AI            AIConfig          `yaml:"ai,omitempty"`
 	Embedding     EmbeddingConfig   `yaml:"embedding,omitempty"`
+	Memory        MemoryConfig      `yaml:"memory,omitempty"`
 	Platforms     PlatformConfig    `yaml:"platforms,omitempty"`
 	Mode          string            `yaml:"mode,omitempty"` // "relay" or "router"
 	Relay         RelayConfig       `yaml:"relay,omitempty"`
@@ -129,6 +130,14 @@ type EmbeddingConfig struct {
 	BaseURL  string `yaml:"base_url,omitempty"`
 	Model    string `yaml:"model,omitempty"`
 	Enabled  bool   `yaml:"enabled,omitempty"`
+}
+
+type MemoryConfig struct {
+	Enabled          bool     `yaml:"enabled,omitempty"`
+	ObsidianVault    string   `yaml:"obsidian_vault,omitempty"`
+	CoreFiles        []string `yaml:"core_files,omitempty"`
+	MaxSearchResults int      `yaml:"max_search_results,omitempty"`
+	MaxFileBytes     int      `yaml:"max_file_bytes,omitempty"`
 }
 
 type PlatformConfig struct {
@@ -259,10 +268,13 @@ type NextcloudConfig struct {
 }
 
 type SecurityConfig struct {
-	AllowedPaths        []string `yaml:"allowed_paths"`
-	BlockedCommands     []string `yaml:"blocked_commands"`
-	RequireConfirmation []string `yaml:"require_confirmation"`
-	DisableFileTools    bool     `yaml:"disable_file_tools"`
+	AllowedPaths          []string `yaml:"allowed_paths"`
+	BlockedCommands       []string `yaml:"blocked_commands"`
+	RequireConfirmation   []string `yaml:"require_confirmation"`
+	AllowFrom             []string `yaml:"allow_from,omitempty"`
+	RequireMentionInGroup bool     `yaml:"require_mention_in_group,omitempty"`
+	EnableSSRFProtection  bool     `yaml:"enable_ssrf_protection,omitempty"`
+	DisableFileTools      bool     `yaml:"disable_file_tools"`
 }
 
 type PromptBuildConfig struct {
@@ -285,9 +297,12 @@ func DefaultConfig() *Config {
 		Transport: "stdio",
 		Port:      8686,
 		Security: SecurityConfig{
-			AllowedPaths:        []string{},
-			BlockedCommands:     []string{"rm -rf /", "mkfs", "dd if="},
-			RequireConfirmation: []string{},
+			AllowedPaths:          []string{},
+			BlockedCommands:       []string{"rm -rf /", "mkfs", "dd if="},
+			RequireConfirmation:   []string{},
+			AllowFrom:             []string{},
+			RequireMentionInGroup: false,
+			EnableSSRFProtection:  true,
 		},
 		Logging: LoggingConfig{
 			Level: "info",
@@ -298,6 +313,18 @@ func DefaultConfig() *Config {
 			Provider: "qwen",
 			Model:    "text-embedding-v3",
 			Enabled:  false,
+		},
+		Memory: MemoryConfig{
+			Enabled:       true,
+			ObsidianVault: "",
+			CoreFiles: []string{
+				"memory/MEMORY.md",
+				"memory/user_profile.md",
+				"memory/response_style.md",
+				"memory/project_context.md",
+			},
+			MaxSearchResults: 6,
+			MaxFileBytes:     200 * 1024,
 		},
 		Search: SearchConfig{
 			PrimaryEngine:   "metaso",
@@ -346,9 +373,13 @@ func ConfigPath() string {
 }
 
 func Load() (*Config, error) {
+	return LoadFromPath(ConfigPath())
+}
+
+func LoadFromPath(path string) (*Config, error) {
 	cfg := DefaultConfig()
 
-	data, err := os.ReadFile(ConfigPath())
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return cfg, nil

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/kayz/coco/internal/security"
 )
 
 // ShellExecutor executes shell commands
@@ -345,21 +347,6 @@ func substituteVariables(text string, ctx ExecutionContext) string {
 }
 
 func containsDangerousCommand(cmd string) bool {
-	dangerous := []string{
-		"rm -rf /",
-		"rm -rf /*",
-		"mkfs",
-		"dd if=",
-		":(){:|:&};:",
-		"chmod -R 777 /",
-		"> /dev/sda",
-	}
-
-	cmdLower := strings.ToLower(cmd)
-	for _, d := range dangerous {
-		if strings.Contains(cmdLower, d) {
-			return true
-		}
-	}
-	return false
+	_, blocked := security.MatchCommandPattern(cmd, security.DefaultBlockedCommandPatterns)
+	return blocked
 }

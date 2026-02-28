@@ -12,10 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/kayz/coco/internal/logger"
 	"github.com/kayz/coco/internal/router"
+	"github.com/kayz/coco/internal/security"
 	"github.com/kayz/coco/internal/tools"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // executeSystemInfo runs the system_info tool
@@ -216,13 +217,10 @@ func executeShell(ctx context.Context, command string) string {
 	logger.Debug("[Shell] Executing: %s", command)
 
 	// Safety check - dangerous commands
-	blocked := []string{"rm -rf /", "mkfs", "dd if="}
 	cmdLower := strings.ToLower(command)
-	for _, b := range blocked {
-		if strings.Contains(cmdLower, b) {
-			logger.Debug("[Shell] Command blocked for safety")
-			return "Command blocked for safety"
-		}
+	if _, ok := security.MatchCommandPattern(cmdLower, security.DefaultBlockedCommandPatterns); ok {
+		logger.Debug("[Shell] Command blocked for safety")
+		return "Command blocked for safety"
 	}
 
 	// Safety check - block reading sensitive files via shell

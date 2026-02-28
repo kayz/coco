@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/kayz/coco/internal/router"
 	"github.com/open-dingtalk/dingtalk-stream-sdk-go/chatbot"
 	"github.com/open-dingtalk/dingtalk-stream-sdk-go/client"
-	"github.com/kayz/coco/internal/router"
 )
 
 // Platform implements router.Platform for DingTalk
@@ -147,6 +148,7 @@ func (p *Platform) onChatBotMessageReceived(ctx context.Context, data *chatbot.B
 				"conversation_title": data.ConversationTitle,
 				"sender_corp_id":     data.SenderCorpId,
 				"chatbot_user_id":    data.ChatbotUserId,
+				"mentioned":          strconv.FormatBool(data.IsInAtList),
 			},
 		}
 

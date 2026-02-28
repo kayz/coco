@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 
 	"github.com/kayz/coco/internal/router"
@@ -162,6 +163,7 @@ func (p *Platform) handleEventsAPI(event slackevents.EventsAPIEvent) {
 					ThreadID:  ev.ThreadTimeStamp,
 					Metadata: map[string]string{
 						"channel_type": ev.ChannelType,
+						"mentioned":    strconv.FormatBool(strings.Contains(ev.Text, "<@"+p.botUserID+">")),
 					},
 				})
 			}
@@ -178,7 +180,9 @@ func (p *Platform) handleEventsAPI(event slackevents.EventsAPIEvent) {
 					Username:  p.getUsername(ev.User),
 					Text:      text,
 					ThreadID:  ev.ThreadTimeStamp,
-					Metadata:  map[string]string{},
+					Metadata: map[string]string{
+						"mentioned": "true",
+					},
 				})
 			}
 		}

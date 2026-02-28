@@ -8,9 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/kayz/coco/internal/config"
 	"github.com/kayz/coco/internal/search"
+	"github.com/kayz/coco/internal/security"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 var (
@@ -82,6 +83,16 @@ func WebFetch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult
 
 	if !strings.HasPrefix(urlStr, "http://") && !strings.HasPrefix(urlStr, "https://") {
 		urlStr = "https://" + urlStr
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		cfg = config.DefaultConfig()
+	}
+	if cfg.Security.EnableSSRFProtection {
+		if err := security.ValidateFetchURL(urlStr); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("url blocked by SSRF protection: %v", err)), nil
+		}
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}

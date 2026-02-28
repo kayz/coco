@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
@@ -148,6 +149,7 @@ func (p *Platform) handleMessage(s *discordgo.Session, m *discordgo.MessageCreat
 			Metadata: map[string]string{
 				"channel_type": channelType,
 				"guild_id":     m.GuildID,
+				"mentioned":    strconv.FormatBool(isDiscordMentioned(m, p.botUserID)),
 			},
 		})
 	}
@@ -179,6 +181,15 @@ func (p *Platform) shouldRespond(m *discordgo.MessageCreate) bool {
 	}
 
 	return false
+}
+
+func isDiscordMentioned(m *discordgo.MessageCreate, botUserID string) bool {
+	for _, mention := range m.Mentions {
+		if mention.ID == botUserID {
+			return true
+		}
+	}
+	return m.ReferencedMessage != nil && m.ReferencedMessage.Author.ID == botUserID
 }
 
 // cleanMention removes the bot mention from the message

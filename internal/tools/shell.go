@@ -8,19 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kayz/coco/internal/config"
+	"github.com/kayz/coco/internal/security"
 	"github.com/mark3labs/mcp-go/mcp"
 )
-
-// Default blocked commands for safety
-var blockedCommands = []string{
-	"rm -rf /",
-	"rm -rf /*",
-	"mkfs",
-	"dd if=/dev/zero",
-	":(){ :|:& };:",
-	"> /dev/sda",
-	"chmod -R 777 /",
-}
 
 // ShellExecute executes a shell command
 func ShellExecute(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -29,12 +20,19 @@ func ShellExecute(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 		return mcp.NewToolResultError("command is required"), nil
 	}
 
-	// Check for blocked commands
-	cmdLower := strings.ToLower(command)
-	for _, blocked := range blockedCommands {
-		if strings.Contains(cmdLower, strings.ToLower(blocked)) {
-			return mcp.NewToolResultError(fmt.Sprintf("command blocked for safety: contains '%s'", blocked)), nil
-		}
+	cfg, err := config.Load()
+	blocked := security.DefaultBlockedCommandPatterns
+	requireConfirmation := []string{}
+	if err == nil {
+		blocked = security.NormalizeCommandPatterns(cfg.Security.BlockedCommands, security.DefaultBlockedCommandPatterns)
+		requireConfirmation = security.NormalizeCommandPatterns(cfg.Security.RequireConfirmation, nil)
+	}
+
+	if matched, blocked := security.MatchCommandPattern(command, blocked); blocked {
+		return mcp.NewToolResultError(fmt.Sprintf("command blocked for safety: contains '%s'", matched)), nil
+	}
+	if matched, needsConfirm := security.MatchCommandPattern(command, requireConfirmation); needsConfirm {
+		return mcp.NewToolResultError(fmt.Sprintf("confirmation required by security policy: contains '%s'", matched)), nil
 	}
 
 	// Get timeout (default 30 seconds)
@@ -63,7 +61,7 @@ func ShellExecute(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 
 	// Build result
 	var result strings.Builder

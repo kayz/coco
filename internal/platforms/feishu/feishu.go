@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 
 	"github.com/kayz/coco/internal/router"
@@ -189,6 +190,7 @@ func (p *Platform) handleMessageEvent(ctx context.Context, event *larkim.P2Messa
 			ThreadID:  "", // Feishu doesn't have traditional threading like Slack
 			Metadata: map[string]string{
 				"chat_type": chatType,
+				"mentioned": strconv.FormatBool(p.isFeishuMentioned(msg)),
 			},
 		})
 	}
@@ -218,6 +220,24 @@ func (p *Platform) shouldRespond(event *larkim.P2MessageReceiveV1) bool {
 		}
 	}
 
+	return false
+}
+
+func (p *Platform) isFeishuMentioned(msg *larkim.EventMessage) bool {
+	if msg == nil {
+		return false
+	}
+	if msg.ChatType != nil && *msg.ChatType == "p2p" {
+		return false
+	}
+	if msg.Mentions == nil {
+		return false
+	}
+	for _, mention := range msg.Mentions {
+		if mention.Id != nil && mention.Id.OpenId != nil && *mention.Id.OpenId == p.botOpenID {
+			return true
+		}
+	}
 	return false
 }
 

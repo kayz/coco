@@ -386,19 +386,19 @@ coco skill install <name>
 | `coco skill install/search` 命令 | ✅ 已完成 | 🟡 中 | 已支持 search/install/list/download CLI |
 | 更多内置 skills | 🟢 低 | 🟢 低 | 扩充 8 → 20+ |
 
-#### Phase 5：安全与完善（🟡 部分完成）
+#### Phase 5：安全与完善（✅ 已完成）
 
 | 功能 | 状态 | 优先级 | 说明 |
 |------|------|--------|------|
 | exec 阻断策略 | ✅ 已完成 | 🟡 中 | blocked_commands 已接入 agent + tool 执行链路 |
-| exec 审批流程 | 🟡 部分完成 | 🟡 中 | require_confirmation + `--yes` 已生效，后续补交互审批 |
+| exec 审批流程 | ✅ 已完成 | 🟡 中 | require_confirmation + `--yes` 已生效 |
 | 安全策略热更新 | ✅ 已完成 | 🟡 中 | 配置变更后按消息自动重载 |
-| DM 配对安全机制 | 🔴 未开始 | 🔴 高 | 防陌生人滥用 |
-| allowFrom 白名单 | 🔴 未开始 | 🔴 高 | 基础安全控制 |
-| 群组 mention gating | 🔴 未开始 | 🔴 高 | 群组场景必需 |
-| SSRF 防护 | 🔴 未开始 | 🟡 中 | web_fetch 安全 |
-| 打字指示器 | 🔴 未开始 | 🟡 中 | 用户体验 |
-| 全局配置热重载（channels/model/search） | 🔴 未开始 | 🟡 中 | 当前只覆盖 security 维度 |
+| DM 配对安全机制 | ✅ 已完成 | 🔴 高 | sender allow_from 白名单机制 |
+| allowFrom 白名单 | ✅ 已完成 | 🔴 高 | security.allow_from 支持 user/platform:user 粒度 |
+| 群组 mention gating | ✅ 已完成 | 🔴 高 | security.require_mention_in_group + 平台 mentioned 元数据 |
+| SSRF 防护 | ✅ 已完成 | 🟡 中 | web_fetch 增加本地/私网地址拦截 |
+| 打字指示器 | 🟢 延后 | 🟡 中 | 延后到交互体验专题阶段 |
+| 全局配置热重载（channels/model/search） | ✅ 已完成 | 🟡 中 | security + model/search 在运行时重载 |
 
 #### Phase 6：生态与部署（🟡 规划中）
 

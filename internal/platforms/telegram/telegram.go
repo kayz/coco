@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -180,6 +181,7 @@ func (p *Platform) handleUpdates(updates tgbotapi.UpdatesChannel) {
 
 				metadata := map[string]string{
 					"chat_type": update.Message.Chat.Type,
+					"mentioned": strconv.FormatBool(isTelegramMentioned(update.Message, p.bot.Self.UserName, p.bot.Self.ID)),
 				}
 				if isVoice {
 					metadata["message_type"] = "voice"
@@ -253,6 +255,19 @@ func (p *Platform) shouldRespond(msg *tgbotapi.Message) bool {
 	}
 
 	return true
+}
+
+func isTelegramMentioned(msg *tgbotapi.Message, botUsername string, botID int64) bool {
+	if msg == nil || msg.Chat.IsPrivate() {
+		return false
+	}
+	if strings.Contains(msg.Text, "@"+botUsername) {
+		return true
+	}
+	if msg.ReplyToMessage != nil && msg.ReplyToMessage.From.ID == botID {
+		return true
+	}
+	return msg.IsCommand()
 }
 
 // cleanMention removes the bot mention from the message

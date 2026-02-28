@@ -85,6 +85,38 @@ func loadDisableFileTools() bool {
 	return false
 }
 
+// loadBlockedCommands returns blocked shell command patterns from config.
+func loadBlockedCommands() []string {
+	if cfg, err := config.Load(); err == nil {
+		return cfg.Security.BlockedCommands
+	}
+	return nil
+}
+
+// loadRequireConfirmation returns shell command patterns that require confirmation.
+func loadRequireConfirmation() []string {
+	if cfg, err := config.Load(); err == nil {
+		return cfg.Security.RequireConfirmation
+	}
+	return nil
+}
+
+// loadAllowFrom returns user/channel whitelist from config.
+func loadAllowFrom() []string {
+	if cfg, err := config.Load(); err == nil {
+		return cfg.Security.AllowFrom
+	}
+	return nil
+}
+
+// loadRequireMentionInGroup returns whether group messages require explicit mention.
+func loadRequireMentionInGroup() bool {
+	if cfg, err := config.Load(); err == nil {
+		return cfg.Security.RequireMentionInGroup
+	}
+	return false
+}
+
 // updateSearchConfig updates the search configuration in the config file
 func updateSearchConfig() {
 	cfg, err := config.Load()

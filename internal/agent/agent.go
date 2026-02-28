@@ -49,44 +49,48 @@ func getExecutableDir() string {
 
 // Agent processes messages using AI providers and tools
 type Agent struct {
-	modelRouter        *ai.ModelRouter
-	registry           *ai.Registry
-	providerCache      map[string]Provider
-	providerMu         sync.RWMutex
-	memory             *ConversationMemory
-	ragMemory          *RAGMemory
-	markdownMemory     *MarkdownMemory
-	sessions           *SessionStore
-	autoApprove        bool
-	customInstructions string
-	cronScheduler      *cronpkg.Scheduler
-	currentMsg         router.Message // set during HandleMessage for cron_create context
-	cronCreatedCount   int            // tracks cron_create calls per HandleMessage turn
-	securityMu         sync.RWMutex
-	pathChecker        *security.PathChecker
-	disableFileTools   bool
-	blockedCommands    []string
-	requireConfirmCmds []string
-	configPath         string
-	configMtime        time.Time
-	persistStore       *persist.Store
-	firstMessageSent   map[string]bool
-	firstMessageMu     sync.RWMutex
-	latestReport       *persist.DailyReport
-	searchRegistry     *search.Registry
-	searchManager      *search.Manager
+	modelRouter           *ai.ModelRouter
+	registry              *ai.Registry
+	providerCache         map[string]Provider
+	providerMu            sync.RWMutex
+	memory                *ConversationMemory
+	ragMemory             *RAGMemory
+	markdownMemory        *MarkdownMemory
+	sessions              *SessionStore
+	autoApprove           bool
+	customInstructions    string
+	cronScheduler         *cronpkg.Scheduler
+	currentMsg            router.Message // set during HandleMessage for cron_create context
+	cronCreatedCount      int            // tracks cron_create calls per HandleMessage turn
+	securityMu            sync.RWMutex
+	pathChecker           *security.PathChecker
+	disableFileTools      bool
+	blockedCommands       []string
+	requireConfirmCmds    []string
+	allowFrom             []string
+	requireMentionInGroup bool
+	configPath            string
+	configMtime           time.Time
+	persistStore          *persist.Store
+	firstMessageSent      map[string]bool
+	firstMessageMu        sync.RWMutex
+	latestReport          *persist.DailyReport
+	searchRegistry        *search.Registry
+	searchManager         *search.Manager
 }
 
 // Config holds agent configuration
 type Config struct {
-	AutoApprove         bool     // Skip all confirmation prompts (default: false)
-	CustomInstructions  string   // Additional instructions appended to system prompt (optional)
-	AllowedPaths        []string // Restrict file/shell operations to these directories (empty = no restriction)
-	BlockedCommands     []string // Block command patterns for shell execution
-	RequireConfirmation []string // Shell command patterns requiring confirmation unless auto approve
-	DisableFileTools    bool     // Completely disable all file operation tools
-	Embedding           config.EmbeddingConfig
-	Memory              config.MemoryConfig
+	AutoApprove           bool     // Skip all confirmation prompts (default: false)
+	CustomInstructions    string   // Additional instructions appended to system prompt (optional)
+	AllowedPaths          []string // Restrict file/shell operations to these directories (empty = no restriction)
+	BlockedCommands       []string // Block command patterns for shell execution
+	RequireConfirmation   []string // Shell command patterns requiring confirmation unless auto approve
+	AllowFrom             []string // Optional sender whitelist (userID/username/platform:userID)
+	RequireMentionInGroup bool     // Ignore group messages unless explicitly mentioned
+	DisableFileTools      bool     // Completely disable all file operation tools
+	Embedding             config.EmbeddingConfig
+	Memory                config.MemoryConfig
 }
 
 // loadPromptFile reads a prompt file from the project root
@@ -450,6 +454,8 @@ func New(cfg Config) (*Agent, error) {
 		cfg.DisableFileTools,
 		cfg.BlockedCommands,
 		cfg.RequireConfirmation,
+		cfg.AllowFrom,
+		cfg.RequireMentionInGroup,
 	)
 	agent.refreshRuntimeSecurityConfig()
 
@@ -459,15 +465,35 @@ func New(cfg Config) (*Agent, error) {
 }
 
 type runtimeSecuritySnapshot struct {
-	pathChecker        *security.PathChecker
-	disableFileTools   bool
-	blockedCommands    []string
-	requireConfirmCmds []string
+	pathChecker           *security.PathChecker
+	disableFileTools      bool
+	blockedCommands       []string
+	requireConfirmCmds    []string
+	allowFrom             []string
+	requireMentionInGroup bool
 }
 
-func (a *Agent) applySecurityConfig(allowedPaths []string, disableFileTools bool, blockedCommands []string, requireConfirmation []string) {
+func normalizeAllowFrom(values []string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		key := strings.ToLower(strings.TrimSpace(v))
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	return out
+}
+
+func (a *Agent) applySecurityConfig(allowedPaths []string, disableFileTools bool, blockedCommands []string, requireConfirmation []string, allowFrom []string, requireMentionInGroup bool) {
 	blocked := security.NormalizeCommandPatterns(blockedCommands, security.DefaultBlockedCommandPatterns)
 	requireConfirm := security.NormalizeCommandPatterns(requireConfirmation, nil)
+	normalizedAllowFrom := normalizeAllowFrom(allowFrom)
 
 	a.securityMu.Lock()
 	defer a.securityMu.Unlock()
@@ -476,6 +502,8 @@ func (a *Agent) applySecurityConfig(allowedPaths []string, disableFileTools bool
 	a.disableFileTools = disableFileTools
 	a.blockedCommands = blocked
 	a.requireConfirmCmds = requireConfirm
+	a.allowFrom = normalizedAllowFrom
+	a.requireMentionInGroup = requireMentionInGroup
 }
 
 func (a *Agent) refreshRuntimeSecurityConfig() {
@@ -506,12 +534,62 @@ func (a *Agent) refreshRuntimeSecurityConfig() {
 		cfg.Security.DisableFileTools,
 		cfg.Security.BlockedCommands,
 		cfg.Security.RequireConfirmation,
+		cfg.Security.AllowFrom,
+		cfg.Security.RequireMentionInGroup,
 	)
+	a.applyModelRouterConfig(cfg.ModelCooldown)
+	a.applySearchConfig(cfg.Search)
 
 	a.securityMu.Lock()
 	a.configMtime = info.ModTime()
 	a.securityMu.Unlock()
-	logger.Info("[Agent] Reloaded security config from %s", a.configPath)
+	logger.Info("[Agent] Reloaded runtime config from %s", a.configPath)
+}
+
+func (a *Agent) applySearchConfig(searchCfg config.SearchConfig) {
+	if a.searchRegistry == nil {
+		a.searchRegistry = search.NewRegistry()
+	}
+	manager, err := search.NewManager(searchCfg, a.searchRegistry)
+	if err != nil {
+		logger.Warn("[Agent] Failed to reload search config: %v", err)
+		return
+	}
+	a.searchManager = manager
+}
+
+func (a *Agent) applyModelRouterConfig(modelCooldown string) {
+	registry, err := ai.LoadRegistry()
+	if err != nil {
+		logger.Warn("[Agent] Failed to reload model registry: %v", err)
+		return
+	}
+
+	cooldownDuration := 5 * time.Minute
+	if modelCooldown != "" {
+		if d, err := time.ParseDuration(modelCooldown); err == nil {
+			cooldownDuration = d
+		}
+	}
+
+	currentModelName := ""
+	if a.modelRouter != nil {
+		if current := a.modelRouter.GetCurrentModel(); current != nil {
+			currentModelName = current.Name
+		}
+	}
+
+	router := ai.NewModelRouter(registry, cooldownDuration)
+	if currentModelName != "" {
+		_ = router.SwitchToModel(currentModelName, true)
+	}
+
+	a.registry = registry
+	a.modelRouter = router
+
+	a.providerMu.Lock()
+	a.providerCache = make(map[string]Provider)
+	a.providerMu.Unlock()
 }
 
 func (a *Agent) securitySnapshot() runtimeSecuritySnapshot {
@@ -519,14 +597,18 @@ func (a *Agent) securitySnapshot() runtimeSecuritySnapshot {
 	defer a.securityMu.RUnlock()
 
 	snapshot := runtimeSecuritySnapshot{
-		pathChecker:      a.pathChecker,
-		disableFileTools: a.disableFileTools,
+		pathChecker:           a.pathChecker,
+		disableFileTools:      a.disableFileTools,
+		requireMentionInGroup: a.requireMentionInGroup,
 	}
 	if len(a.blockedCommands) > 0 {
 		snapshot.blockedCommands = append([]string(nil), a.blockedCommands...)
 	}
 	if len(a.requireConfirmCmds) > 0 {
 		snapshot.requireConfirmCmds = append([]string(nil), a.requireConfirmCmds...)
+	}
+	if len(a.allowFrom) > 0 {
+		snapshot.allowFrom = append([]string(nil), a.allowFrom...)
 	}
 	return snapshot
 }
@@ -547,6 +629,97 @@ func (a *Agent) validateShellCommand(command string) string {
 	}
 
 	return ""
+}
+
+func (a *Agent) enforceMessageSecurityPolicy(msg router.Message) (string, bool) {
+	snapshot := a.securitySnapshot()
+
+	if len(snapshot.allowFrom) > 0 && !isSenderAllowed(msg, snapshot.allowFrom) {
+		logger.Warn("[Agent] Message rejected by allow_from policy: %s/%s", msg.Platform, msg.UserID)
+		return "ACCESS DENIED: sender is not in security.allow_from whitelist.", true
+	}
+
+	if snapshot.requireMentionInGroup && isGroupConversation(msg) && !isMessageExplicitlyMentioned(msg) {
+		logger.Info("[Agent] Group message ignored because mention is required: %s/%s", msg.Platform, msg.ChannelID)
+		return "", true
+	}
+
+	return "", false
+}
+
+func isSenderAllowed(msg router.Message, allowFrom []string) bool {
+	if len(allowFrom) == 0 {
+		return true
+	}
+
+	candidates := []string{
+		strings.ToLower(strings.TrimSpace(msg.UserID)),
+		strings.ToLower(strings.TrimSpace(msg.Username)),
+		strings.ToLower(strings.TrimSpace(msg.Platform + ":" + msg.UserID)),
+		strings.ToLower(strings.TrimSpace(msg.Platform + ":" + msg.Username)),
+	}
+
+	allowed := make(map[string]struct{}, len(allowFrom))
+	for _, v := range allowFrom {
+		allowed[strings.ToLower(strings.TrimSpace(v))] = struct{}{}
+	}
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if _, ok := allowed[candidate]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func isGroupConversation(msg router.Message) bool {
+	meta := msg.Metadata
+	if len(meta) == 0 {
+		return false
+	}
+
+	chatType := strings.ToLower(strings.TrimSpace(meta["chat_type"]))
+	switch chatType {
+	case "private", "p2p", "im", "dm":
+		return false
+	case "group", "supergroup":
+		return true
+	}
+
+	channelType := strings.ToLower(strings.TrimSpace(meta["channel_type"]))
+	switch channelType {
+	case "im", "dm":
+		return false
+	case "group", "group_dm", "mpim", "channel":
+		return true
+	}
+
+	if strings.TrimSpace(meta["guild_id"]) != "" {
+		return true
+	}
+	if strings.TrimSpace(meta["group_id"]) != "" {
+		return true
+	}
+	if strings.TrimSpace(meta["conversation_type"]) == "2" {
+		return true
+	}
+
+	return false
+}
+
+func isMessageExplicitlyMentioned(msg router.Message) bool {
+	meta := msg.Metadata
+	for _, key := range []string{"mentioned", "is_mentioned", "bot_mentioned", "is_in_at_list"} {
+		value := strings.ToLower(strings.TrimSpace(meta[key]))
+		if value == "true" || value == "1" || value == "yes" {
+			return true
+		}
+	}
+
+	text := strings.TrimSpace(msg.Text)
+	return strings.Contains(text, "@")
 }
 
 // initializeDailyReport initializes the daily report functionality
@@ -1141,6 +1314,13 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 	a.currentMsg = msg
 	a.cronCreatedCount = 0
 	logger.Info("[Agent] Processing message from %s: %s (model: %s)", msg.Username, msg.Text, a.currentModelName())
+
+	if denial, drop := a.enforceMessageSecurityPolicy(msg); drop {
+		if denial == "" {
+			return router.Response{}, nil
+		}
+		return router.Response{Text: denial}, nil
+	}
 
 	// Handle built-in commands
 	if resp, handled := a.handleBuiltinCommand(msg); handled {

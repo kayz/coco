@@ -294,9 +294,13 @@ func runRelay(cmd *cobra.Command, args []string) {
 
 	// Create the AI agent
 	aiAgent, err := agent.New(agent.Config{
-		CustomInstructions: customInstructions,
-		AllowedPaths:       loadAllowedPaths(),
-		DisableFileTools:   loadDisableFileTools(),
+		CustomInstructions:    customInstructions,
+		AllowedPaths:          loadAllowedPaths(),
+		BlockedCommands:       loadBlockedCommands(),
+		RequireConfirmation:   loadRequireConfirmation(),
+		AllowFrom:             loadAllowFrom(),
+		RequireMentionInGroup: loadRequireMentionInGroup(),
+		DisableFileTools:      loadDisableFileTools(),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating agent: %v\n", err)
