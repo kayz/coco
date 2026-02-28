@@ -3,7 +3,18 @@
 > 本文档记录 coco 项目的长期愿景、架构决策和实现路线图。
 > 所有功能的实现状态、每阶段目标和架构设计均在此维护。
 >
-> 最后更新：2026-02-26
+> 最后更新：2026-02-28
+
+---
+
+## 0. 实施方法（本轮新增）
+
+为保证愿景持续落地，本项目统一采用以下执行闭环（每个 Phase 都执行）：
+
+1. 先写测试（单元/集成/验收脚本），明确通过标准。
+2. 按测试驱动开发实现功能，不跳过安全与可观测性。
+3. 运行阶段测试 + 全量回归测试，必须通过后才进入文档阶段。
+4. 更新文档（VISION + phase plan + runbook + 变更日志），保证“代码即状态”。
 
 ---
 
@@ -145,9 +156,9 @@ Keeper（接收 Webhook）
 
 外部 Agent 应用
     │
-    ├── Cron 驱动��Keeper 调度）──► 结果转发给用户（传话模式）
+    ├── Cron 驱动（Keeper 调度）──► 结果转发给用户（传话模式）
     │
-    └── coco 主动调用 ──────────► 结果转发给用户（传话模式）
+    └── coco 主动调用 ───────────► 结果转发给用户（传话模式）
 ```
 
 ### 3.3 传话模式
@@ -260,6 +271,23 @@ coco skill install <name>
 用户确认后安装
 ```
 
+### 4.5 个人系统工作区契约（新增）
+
+针对“长期个人使用”场景，coco 采用工作区 Markdown 契约作为上层产品接口，减少人格/偏好/运行规则散落在代码和配置里的问题：
+
+- `AGENTS.md`：运行规范与工具调用约束（必需）
+- `SOUL.md`：价值观、人格边界、行为准则（必需）
+- `PROFILE.md`：用户画像与 agent 身份（可读写）
+- `MEMORY.md`：长期沉淀记忆（可读写）
+- `HEARTBEAT.md`：后台巡检与周期任务意图（可读写）
+- `BOOTSTRAP.md`：首次人格引导流程（一次性）
+
+配套能力要求：
+
+- PromptBuild 支持读取上述工作区文件并组装系统提示。
+- 运行时支持配置与安全策略热更新（无需重启）。
+- 长对话支持自动上下文压缩（避免 token 衰减导致“失忆”）。
+
 ---
 
 ## 五、实现状态
@@ -269,6 +297,8 @@ coco skill install <name>
 | 功能 | 状态 | 说明 |
 |------|------|------|
 | 多 AI 提供商 | ✅ | Claude/DeepSeek/Kimi/Qwen/OpenAI 及 15+ 兼容提供商 |
+| ModelRouter + failover | ✅ | 已实现模型切换、失败降级、冷却机制 |
+| AI 模型工具调用 | ✅ | `ai.list_models` / `ai.switch_model` / `ai.get_current_model` |
 | Telegram | ✅ | 完整实现 |
 | Discord | ✅ | 完整实现 |
 | Slack | ✅ | 完整实现 |
@@ -288,6 +318,7 @@ coco skill install <name>
 | 语音 TTS | ✅ | ElevenLabs/系统TTS/OpenAI |
 | Cron 调度 | ✅ | robfig/cron，秒级精度 |
 | RAG 长程记忆 | ✅ | chromem-go，向量搜索 |
+| Markdown 记忆检索 | ✅ | Core files + Obsidian 检索、语义融合、MMR 重排 |
 | 用户偏好自动学习 | ✅ | 从对话中提取并记忆 |
 | 日报生成 | ✅ | 每日对话/工作报告 |
 | SQLite 持久化 | ✅ | WAL 模式 |
@@ -300,6 +331,8 @@ coco skill install <name>
 | coco 连接自建 Keeper | ✅ | v1.9.0 — relay 模式指向自建 Keeper，跳过本地 WeCom 凭证 |
 | 离线兜底 | ✅ | v1.9.0 — coco 离线时 Keeper 返回固定文本 |
 | PromptBuild 模块 | ✅ | v1.9.0 — 无状态 Prompt 组装（SQLite + Markdown 模板） |
+| Shell 安全策略配置贯通 | ✅ | `security.blocked_commands` / `security.require_confirmation` 已接入运行时执行链路 |
+| 安全策略热更新 | ✅ | 消息处理前按配置文件 mtime 自动重载，无需重启 |
 
 ### Phase 0：双 Agent 架构骨架（✅ 已完成 — 2026-02-26，v1.9.0）
 
@@ -316,63 +349,75 @@ coco skill install <name>
 
 ### 待实现（🚧 规划中）
 
-#### Phase 1：多模型路由
+#### Phase 1：多模型路由（🟡 部分完成）
 
-| 功能 | 优先级 | 说明 |
-|------|--------|------|
-| 模型能力配置（capabilities/cost） | 🔴 高 | YAML 新增字段 |
-| ModelRouter 实现 | 🔴 高 | 按任务类型选择模型 |
-| AI 工具调用切换模型 | 🟡 中 | 系统提示注入模型清单 |
-| 模型 failover | 🔴 高 | 多 profile 轮换 + 冷却 |
+| 功能 | 状态 | 优先级 | 说明 |
+|------|------|--------|------|
+| ModelRouter 实现 | ✅ 已完成 | 🔴 高 | 已支持切换、failover、冷却 |
+| AI 工具调用切换模型 | ✅ 已完成 | 🟡 中 | 已有模型管理工具 |
+| 模型能力配置（capabilities/cost）完善 | 🟡 进行中 | 🔴 高 | 补齐应用级路由策略和约束字段 |
+| 按应用可用模型池隔离 | 🟡 进行中 | 🔴 高 | coco/keeper/cron 各自模型池 |
 
-#### Phase 2：外部 Agent 应用
+#### Phase 2：外部 Agent 应用（✅ 已完成）
 
-| 功能 | 优先级 | 说明 |
-|------|--------|------|
-| Cron `type: external` | 🔴 高 | 外部应用调度 |
-| 外部应用调用协议 | 🔴 高 | HTTP POST + bearer token |
-| 传话模式（source 标记） | 🔴 高 | 防 prompt injection |
-| `spawn_agent` 工具 | 🟡 中 | coco 监督 claude code 开发 |
+| 功能 | 状态 | 优先级 | 说明 |
+|------|------|--------|------|
+| Cron `type: external` | ✅ 已完成 | 🔴 高 | 已支持 external job 调度与配置校验 |
+| 外部应用调用协议 | ✅ 已完成 | 🔴 高 | HTTP POST + bearer token + timeout |
+| 传话模式（source 标记） | ✅ 已完成 | 🔴 高 | source/relay_mode 已进入调度与工具链路 |
+| `spawn_agent` 工具 | ✅ 已完成 | 🟡 中 | 已支持 coco 主动调用外部 agent endpoint |
 
-#### Phase 3：长程记忆增强
+#### Phase 3：长程记忆增强（✅ 已完成）
 
-| 功能 | 优先级 | 说明 |
-|------|--------|------|
-| Obsidian vault 文件监视 | 🟡 中 | fsnotify + 自动索引 |
-| 记忆分层（工作/情节/语义） | 🟡 中 | 三层记忆架构 |
-| 时间衰减 | 🟡 中 | 旧记忆权重降低 |
-| MMR 多样性排序 | 🟡 中 | 搜索结果多样性 |
-| 上下文自动压缩 | 🔴 高 | 长对话必需 |
+| 功能 | 状态 | 优先级 | 说明 |
+|------|------|--------|------|
+| 记忆分层（工作/情节/语义） | ✅ 已完成 | 🟡 中 | SQLite + RAG + Markdown/Obsidian |
+| 时间衰减 | ✅ 已完成 | 🟡 中 | 检索评分已包含时间因子 |
+| MMR 多样性排序 | ✅ 已完成 | 🟡 中 | Markdown 记忆已启用 MMR |
+| Obsidian vault 文件监视 | ✅ 已完成 | 🟡 中 | 轮询 watcher + 缓存/embedding 增量回收 |
+| 上下文自动压缩 | ✅ 已完成 | 🔴 高 | 超阈值自动摘要并保留最近消息 |
 
-#### Phase 4：Skills 安全 + 扩展
+#### Phase 4：Skills 安全 + 扩展（🟡 部分完成）
 
-| 功能 | 优先级 | 说明 |
-|------|--------|------|
-| Skills 安全评估（思维链 LLM） | 🟡 中 | 安装前自动分析 |
-| `coco skill install/search` 命令 | 🟡 中 | CLI 技能管理 |
-| 更多内置 skills | 🟢 低 | 扩充 8 → 20+ |
+| 功能 | 状态 | 优先级 | 说明 |
+|------|------|--------|------|
+| skills 分层发现优先级 | ✅ 已完成 | 🟡 中 | workspace > managed > bundled |
+| Skills 安全评估（思维链 LLM） | 🔴 未开始 | 🟡 中 | 安装前自动分析 |
+| `coco skill install/search` 命令 | 🔴 未开始 | 🟡 中 | CLI 技能管理 |
+| 更多内置 skills | 🟢 低 | 🟢 低 | 扩充 8 → 20+ |
 
-#### Phase 5：安全与完善
+#### Phase 5：安全与完善（🟡 部分完成）
 
-| 功能 | 优先级 | 说明 |
-|------|--------|------|
-| DM 配对安全机制 | 🔴 高 | 防陌生人滥用 |
-| allowFrom 白名单 | 🔴 高 | 基础安全控制 |
-| 群组 mention gating | 🔴 高 | 群组场景必需 |
-| exec 审批流程 | 🟡 中 | 高危命令人工确认 |
-| SSRF 防护 | 🟡 中 | web_fetch 安全 |
-| 打字指示器 | 🟡 中 | 用户体验 |
-| 配置热重载 | 🟡 中 | 无需重启 |
+| 功能 | 状态 | 优先级 | 说明 |
+|------|------|--------|------|
+| exec 阻断策略 | ✅ 已完成 | 🟡 中 | blocked_commands 已接入 agent + tool 执行链路 |
+| exec 审批流程 | 🟡 部分完成 | 🟡 中 | require_confirmation + `--yes` 已生效，后续补交互审批 |
+| 安全策略热更新 | ✅ 已完成 | 🟡 中 | 配置变更后按消息自动重载 |
+| DM 配对安全机制 | 🔴 未开始 | 🔴 高 | 防陌生人滥用 |
+| allowFrom 白名单 | 🔴 未开始 | 🔴 高 | 基础安全控制 |
+| 群组 mention gating | 🔴 未开始 | 🔴 高 | 群组场景必需 |
+| SSRF 防护 | 🔴 未开始 | 🟡 中 | web_fetch 安全 |
+| 打字指示器 | 🔴 未开始 | 🟡 中 | 用户体验 |
+| 全局配置热重载（channels/model/search） | 🔴 未开始 | 🟡 中 | 当前只覆盖 security 维度 |
 
-#### Phase 6：生态与部署
+#### Phase 6：生态与部署（🟡 规划中）
 
-| 功能 | 优先级 | 说明 |
-|------|--------|------|
-| Web UI（基础 WebChat） | 🟢 低 | 浏览器访问 |
-| Docker 支持 | 🟢 低 | 容器化部署 |
-| 子 Agent 系统 | 🟢 低 | sessions_spawn |
-| Agent 间通信 | 🟢 低 | sessions_send |
-| Keeper 离线时兜底 LLM 完善 | 🟡 中 | 更自然的离线答复 |
+| 功能 | 状态 | 优先级 | 说明 |
+|------|------|--------|------|
+| Web UI（基础 WebChat） | 🔴 未开始 | 🟢 低 | 浏览器访问 |
+| Docker 支持 | 🔴 未开始 | 🟢 低 | 容器化部署 |
+| 子 Agent 系统 | 🔴 未开始 | 🟢 低 | sessions_spawn |
+| Agent 间通信 | 🔴 未开始 | 🟢 低 | sessions_send |
+| Keeper 离线时兜底 LLM 完善 | 🟡 规划中 | 🟡 中 | 更自然的离线答复 |
+
+#### Phase 7：工作区产品化（新增）
+
+| 功能 | 状态 | 优先级 | 说明 |
+|------|------|--------|------|
+| 工作区文件契约（AGENTS/SOUL/PROFILE） | 🔴 未开始 | 🔴 高 | 统一人格与规则入口 |
+| HEARTBEAT.md 后台意图入口 | 🔴 未开始 | 🟡 中 | 可编辑的巡检任务协议 |
+| BOOTSTRAP.md 人格引导 | 🔴 未开始 | 🟡 中 | 与基础 `onboard` 分层 |
+| PromptBuild 集成工作区文件 | 🔴 未开始 | 🔴 高 | 运行时系统提示可持续演化 |
 
 ---
 
@@ -433,14 +478,37 @@ coco skill install <name>
 
 ---
 
+### ADR-006：Shell 安全策略以配置为准、默认兜底
+
+**决策**：`security.blocked_commands` 与 `security.require_confirmation` 必须进入执行链路；同时保留内置危险命令默认兜底规则。
+
+**原因**：
+- 配置是用户可维护的安全边界，不应只停留在文档层
+- 默认阻断用于防止配置缺失导致高危命令放行
+- 支持个人系统长期演进（可按场景增量加规则）
+
+---
+
+### ADR-007：配置热更新先从安全策略开始
+
+**决策**：先实现“按配置文件 mtime 的运行时重载（security 维度）”，后续再扩展至 channels/model/search/memory 等全局热更新。
+
+**原因**：
+- 安全策略变更时效性最高，应优先无需重启生效
+- 分层交付能快速降低风险，同时避免一次性改动过大
+- 与 TDD 流程匹配，便于逐 phase 验证
+
+---
+
 ## 七、参考项目
 
 | 项目 | 语言 | 参考价值 |
 |------|------|----------|
 | OpenClaw | TypeScript | 能力基准，架构参考（Gateway/Plugin/Skills） |
+| CoPaw | Python | OpenClaw 跟随者，工作区契约/热更新/压缩机制参考 |
 | coco（当前） | Go | 基础代码，中国平台支持 |
 
-详细对比见：`docs/openclaw-feature-comparison.md`
+阶段实施计划见：`docs/phases/README.md`
 
 ---
 

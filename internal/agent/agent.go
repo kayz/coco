@@ -427,6 +427,7 @@ func New(cfg Config) (*Agent, error) {
 	if err := markdownMemory.EnableSemanticSearch(effectiveEmbedding); err != nil {
 		log.Printf("[AGENT] Markdown semantic search disabled: %v", err)
 	}
+	markdownMemory.StartWatcher(10 * time.Second)
 
 	agent := &Agent{
 		modelRouter:        modelRouter,
@@ -1154,6 +1155,12 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 
 	// Get conversation history
 	history := a.memory.GetHistory(convKey)
+	if thresholdChars, keepRecent := contextCompactionSettings(); thresholdChars > 0 {
+		if compacted, compactedOK := compactHistoryForPrompt(history, thresholdChars, keepRecent); compactedOK {
+			logger.Info("[Agent] Context compaction applied: %d -> %d messages", len(history), len(compacted))
+			history = compacted
+		}
+	}
 	logger.Trace("[Agent] Conversation key: %s, history messages: %d", convKey, len(history))
 
 	// Create messages with history
