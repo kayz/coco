@@ -90,6 +90,11 @@ type BuildRequest struct {
 - `user_input`
 - `inline_text`
 
+预算控制（Spec 可选）：
+- `defaults.max_prompt_chars`：最终 Prompt 字符上限（按字符数）
+- `sections[].max_chars`：单 section 字符上限
+- 超限时优先截断末尾的非必填 section，再截断必填 section
+
 完整样例见：`docs/promptbuild-agent-spec.example.yaml`
 
 ## 审计日志

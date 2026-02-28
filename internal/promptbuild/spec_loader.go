@@ -51,6 +51,9 @@ func validatePromptAssemblySpec(spec *PromptAssemblySpec) error {
 	if len(spec.Sections) == 0 {
 		return fmt.Errorf("sections is required")
 	}
+	if spec.Defaults.MaxPromptChars < 0 {
+		return fmt.Errorf("defaults.max_prompt_chars cannot be negative")
+	}
 
 	seenIDs := make(map[string]struct{}, len(spec.Sections))
 	for _, sec := range spec.Sections {
@@ -66,6 +69,9 @@ func validatePromptAssemblySpec(spec *PromptAssemblySpec) error {
 		st := strings.TrimSpace(sec.SourceType)
 		if st == "" {
 			return fmt.Errorf("section %s source_type is required", id)
+		}
+		if sec.MaxChars < 0 {
+			return fmt.Errorf("section %s max_chars cannot be negative", id)
 		}
 		if !isSupportedSourceType(st) {
 			return fmt.Errorf("section %s has unsupported source_type: %s", id, st)

@@ -349,14 +349,14 @@ coco skill install <name>
 
 ### 待实现（🚧 规划中）
 
-#### Phase 1：多模型路由（🟡 部分完成）
+#### Phase 1：多模型路由（✅ 已完成）
 
 | 功能 | 状态 | 优先级 | 说明 |
 |------|------|--------|------|
 | ModelRouter 实现 | ✅ 已完成 | 🔴 高 | 已支持切换、failover、冷却 |
 | AI 工具调用切换模型 | ✅ 已完成 | 🟡 中 | 已有模型管理工具 |
-| 模型能力配置（capabilities/cost）完善 | 🟡 进行中 | 🔴 高 | 补齐应用级路由策略和约束字段 |
-| 按应用可用模型池隔离 | 🟡 进行中 | 🔴 高 | coco/keeper/cron 各自模型池 |
+| 模型能力配置（capabilities/cost）完善 | ✅ 已完成 | 🔴 高 | 支持能力/费用/速度分层配置 |
+| 按应用可用模型池隔离 | ✅ 已完成 | 🔴 高 | 运行时按 agent/cron/search 维度生效 |
 
 #### Phase 2：外部 Agent 应用（✅ 已完成）
 
@@ -410,14 +410,14 @@ coco skill install <name>
 | Agent 间通信 | ✅ 已完成 | 🟢 低 | sessions_send |
 | Keeper 离线时兜底 LLM 完善 | 🟡 规划中 | 🟡 中 | 继续优化离线答复质量 |
 
-#### Phase 7：工作区产品化（新增）
+#### Phase 7：工作区产品化（✅ 已完成）
 
 | 功能 | 状态 | 优先级 | 说明 |
 |------|------|--------|------|
-| 工作区文件契约（AGENTS/SOUL/PROFILE） | 🔴 未开始 | 🔴 高 | 统一人格与规则入口 |
-| HEARTBEAT.md 后台意图入口 | 🔴 未开始 | 🟡 中 | 可编辑的巡检任务协议 |
-| BOOTSTRAP.md 人格引导 | 🔴 未开始 | 🟡 中 | 与基础 `onboard` 分层 |
-| PromptBuild 集成工作区文件 | 🔴 未开始 | 🔴 高 | 运行时系统提示可持续演化 |
+| 工作区文件契约（AGENTS/SOUL/PROFILE） | ✅ 已完成 | 🔴 高 | 启动时自动初始化/补齐模板文件 |
+| HEARTBEAT.md 后台意图入口 | ✅ 已完成 | 🟡 中 | HEARTBEAT 已进入工作区提示组装链路 |
+| BOOTSTRAP.md 人格引导 | ✅ 已完成 | 🟡 中 | 首次会话一次性注入 BOOTSTRAP 指令 |
+| PromptBuild 集成工作区文件 | ✅ 已完成 | 🔴 高 | workspace_contract/bootstrap_instruction 输入已接入 |
 
 ---
 

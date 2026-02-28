@@ -61,6 +61,18 @@ func TestValidatePromptAssemblySpecRequiredChecks(t *testing.T) {
 			name: "unsupported source_type",
 			spec: PromptAssemblySpec{Agent: "a", Sections: []SectionSpec{{ID: "s1", SourceType: "unknown"}}},
 		},
+		{
+			name: "negative section max_chars",
+			spec: PromptAssemblySpec{Agent: "a", Sections: []SectionSpec{{ID: "s1", SourceType: "inline_text", Source: "x", MaxChars: -1}}},
+		},
+		{
+			name: "negative defaults max_prompt_chars",
+			spec: PromptAssemblySpec{
+				Agent:    "a",
+				Defaults: PromptAssemblyDefault{MaxPromptChars: -1},
+				Sections: []SectionSpec{{ID: "s1", SourceType: "inline_text", Source: "x"}},
+			},
+		},
 	}
 
 	for _, tc := range tests {

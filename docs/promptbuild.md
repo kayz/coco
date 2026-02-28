@@ -53,6 +53,7 @@ obsidian/
 - include_section_headers: optional (default true)
 - agent/spec_path: optional, enable spec-driven assembly
 - inputs: optional key/value map for spec `request_field` / `inline_text` sources
+  - built-in runtime input example: `memory_recall` (markdown/RAG recall text)
 
 ## Assembly Modes
 
@@ -75,6 +76,22 @@ Supported `source_type` values:
 - `history`
 - `user_input`
 - `inline_text`
+
+Token budget controls in spec:
+- `defaults.max_prompt_chars`: hard cap for final prompt length (character-based)
+- `sections[].max_chars`: per-section cap before final assembly
+- When over budget, non-required trailing sections are truncated first, then required sections if still needed
+
+Common `inputs` keys from agent runtime:
+- `thinking_prompt`
+- `report_notification`
+- `memory_recall`
+- `planner_instruction`
+- `workspace_contract`
+- `bootstrap_instruction`
+
+Runtime default:
+- `internal/agent` now sends `agent: coco`, which resolves to `prompts/specs/coco.yaml` when PromptBuild is enabled.
 
 If a section is marked `required: true` and resolves to empty content, `Build()` returns an error.
 

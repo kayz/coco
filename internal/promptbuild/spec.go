@@ -13,6 +13,7 @@ type PromptAssemblySpec struct {
 type PromptAssemblyDefault struct {
 	IncludeSectionHeaders *bool `yaml:"include_section_headers,omitempty" json:"include_section_headers,omitempty"`
 	MaxHistory            int   `yaml:"max_history,omitempty" json:"max_history,omitempty"`
+	MaxPromptChars        int   `yaml:"max_prompt_chars,omitempty" json:"max_prompt_chars,omitempty"`
 }
 
 // SectionSpec defines one section in the assembly plan.
@@ -24,4 +25,5 @@ type SectionSpec struct {
 	Source     string   `yaml:"source,omitempty" json:"source,omitempty"`
 	Templates  []string `yaml:"templates,omitempty" json:"templates,omitempty"`
 	Order      int      `yaml:"order,omitempty" json:"order,omitempty"`
+	MaxChars   int      `yaml:"max_chars,omitempty" json:"max_chars,omitempty"`
 }

@@ -55,6 +55,9 @@ func (b *Builder) Build(req BuildRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if spec != nil && spec.Defaults.MaxPromptChars > 0 {
+		sections = trimSectionsToPromptBudget(sections, spec.Defaults.MaxPromptChars)
+	}
 
 	finalPrompt := renderSections(sections)
 	if err := b.writeAuditRecord(req, finalPrompt, sections); err != nil {
@@ -77,14 +80,14 @@ func (b *Builder) buildLegacySections(req BuildRequest, includeHeaders bool) ([]
 		return nil, err
 	}
 
-	sections = b.appendSection(sections, "System", systemText, includeHeaders)
-	sections = b.appendSection(sections, "Task", taskText, includeHeaders)
-	sections = b.appendSection(sections, "Requirements", strings.TrimSpace(req.Requirements), includeHeaders)
-	sections = b.appendSection(sections, "Format", formatText, includeHeaders)
-	sections = b.appendSection(sections, "Style", styleText, includeHeaders)
-	sections = b.appendSection(sections, "References", referenceText, includeHeaders)
-	sections = b.appendSection(sections, "Chat History", historyText, includeHeaders)
-	sections = b.appendSection(sections, "User Input", strings.TrimSpace(req.UserInput), includeHeaders)
+	sections = b.appendSection(sections, "System", systemText, includeHeaders, false)
+	sections = b.appendSection(sections, "Task", taskText, includeHeaders, false)
+	sections = b.appendSection(sections, "Requirements", strings.TrimSpace(req.Requirements), includeHeaders, false)
+	sections = b.appendSection(sections, "Format", formatText, includeHeaders, false)
+	sections = b.appendSection(sections, "Style", styleText, includeHeaders, false)
+	sections = b.appendSection(sections, "References", referenceText, includeHeaders, false)
+	sections = b.appendSection(sections, "Chat History", historyText, includeHeaders, false)
+	sections = b.appendSection(sections, "User Input", strings.TrimSpace(req.UserInput), includeHeaders, false)
 
 	return sections, nil
 }
@@ -101,10 +104,13 @@ func (b *Builder) buildSectionsFromSpec(req BuildRequest, spec *PromptAssemblySp
 		if err != nil {
 			return nil, err
 		}
+		if sec.MaxChars > 0 {
+			content = truncateTextByRunes(content, sec.MaxChars)
+		}
 		if sec.Required && strings.TrimSpace(content) == "" {
 			return nil, fmt.Errorf("required section %q is empty", sec.ID)
 		}
-		sections = b.appendSection(sections, title, content, includeHeaders)
+		sections = b.appendSection(sections, title, content, includeHeaders, sec.Required)
 	}
 	return sections, nil
 }
@@ -173,13 +179,14 @@ type section struct {
 	title         string
 	content       string
 	includeHeader bool
+	required      bool
 }
 
-func (b *Builder) appendSection(list []section, title, content string, includeHeader bool) []section {
+func (b *Builder) appendSection(list []section, title, content string, includeHeader bool, required bool) []section {
 	if strings.TrimSpace(content) == "" {
 		return list
 	}
-	return append(list, section{title: title, content: content, includeHeader: includeHeader})
+	return append(list, section{title: title, content: content, includeHeader: includeHeader, required: required})
 }
 
 func renderSections(sections []section) string {
@@ -196,6 +203,82 @@ func renderSections(sections []section) string {
 		out.WriteString(s.content)
 	}
 	return out.String()
+}
+
+func trimSectionsToPromptBudget(sections []section, maxPromptChars int) []section {
+	if maxPromptChars <= 0 || len(sections) == 0 {
+		return sections
+	}
+
+	current := runeCount(renderSections(sections))
+	if current <= maxPromptChars {
+		return sections
+	}
+
+	over := current - maxPromptChars
+	for i := len(sections) - 1; i >= 0 && over > 0; i-- {
+		if sections[i].required {
+			continue
+		}
+		reduced := reduceSectionRunes(&sections[i], over)
+		over -= reduced
+	}
+	for i := len(sections) - 1; i >= 0 && over > 0; i-- {
+		reduced := reduceSectionRunes(&sections[i], over)
+		over -= reduced
+	}
+
+	out := make([]section, 0, len(sections))
+	for _, s := range sections {
+		if strings.TrimSpace(s.content) == "" {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func reduceSectionRunes(s *section, need int) int {
+	if s == nil || need <= 0 {
+		return 0
+	}
+	contentLen := runeCount(s.content)
+	if contentLen == 0 {
+		return 0
+	}
+	target := contentLen - need
+	if target <= 0 {
+		s.content = ""
+		return contentLen
+	}
+	newContent := truncateTextByRunes(s.content, target)
+	reduced := contentLen - runeCount(newContent)
+	s.content = newContent
+	return reduced
+}
+
+func truncateTextByRunes(text string, maxRunes int) string {
+	text = strings.TrimSpace(text)
+	if text == "" || maxRunes <= 0 {
+		return ""
+	}
+
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+
+	const suffix = "\n\n...[truncated by prompt budget]"
+	suffixRunes := []rune(suffix)
+	if maxRunes <= len(suffixRunes)+8 {
+		return strings.TrimSpace(string(runes[:maxRunes]))
+	}
+	keep := maxRunes - len(suffixRunes)
+	return strings.TrimSpace(string(runes[:keep])) + suffix
+}
+
+func runeCount(s string) int {
+	return len([]rune(s))
 }
 
 func (b *Builder) applyDefaults(req BuildRequest) BuildRequest {

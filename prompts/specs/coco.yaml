@@ -1,0 +1,77 @@
+version: v1
+agent: coco
+description: "Default prompt assembly contract for coco runtime."
+defaults:
+  include_section_headers: true
+  max_history: 160
+  max_prompt_chars: 18000
+sections:
+  - id: task_objective
+    title: Task Objective
+    required: true
+    source_type: request_field
+    source: requirements
+    order: 10
+    max_chars: 1000
+
+  - id: memory_recall
+    title: Memory Recall
+    required: false
+    source_type: inline_text
+    source: memory_recall
+    order: 20
+    max_chars: 5000
+
+  - id: report_notification
+    title: Report Notification
+    required: false
+    source_type: inline_text
+    source: report_notification
+    order: 30
+    max_chars: 1000
+
+  - id: workspace_contract
+    title: Workspace Contract
+    required: false
+    source_type: inline_text
+    source: workspace_contract
+    order: 35
+    max_chars: 5000
+
+  - id: bootstrap_instruction
+    title: Bootstrap Instruction
+    required: false
+    source_type: inline_text
+    source: bootstrap_instruction
+    order: 38
+    max_chars: 1200
+
+  - id: thinking_prompt
+    title: Thinking Prompt
+    required: false
+    source_type: inline_text
+    source: thinking_prompt
+    order: 40
+    max_chars: 1000
+
+  - id: chat_history
+    title: Chat History
+    required: false
+    source_type: history
+    order: 50
+    max_chars: 7000
+
+  - id: planner_instruction
+    title: Planner Instruction
+    required: false
+    source_type: inline_text
+    source: planner_instruction
+    order: 55
+    max_chars: 1200
+
+  - id: user_input
+    title: User Input
+    required: true
+    source_type: user_input
+    order: 60
+    max_chars: 2000

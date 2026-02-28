@@ -75,6 +75,8 @@ type Agent struct {
 	persistStore          *persist.Store
 	firstMessageSent      map[string]bool
 	firstMessageMu        sync.RWMutex
+	bootstrapSent         map[string]bool
+	bootstrapMu           sync.Mutex
 	latestReport          *persist.DailyReport
 	searchRegistry        *search.Registry
 	searchManager         *search.Manager
@@ -131,9 +133,14 @@ var workspacePromptOrder = []workspacePromptFile{
 	{name: "HEARTBEAT.md", required: false},
 }
 
+const workspaceBootstrapFile = "BOOTSTRAP.md"
+
 func getWorkspaceDir() string {
 	if env := strings.TrimSpace(os.Getenv("COCO_WORKSPACE_DIR")); env != "" {
 		return env
+	}
+	if wd, err := os.Getwd(); err == nil && strings.TrimSpace(wd) != "" {
+		return wd
 	}
 	if exeDir := getExecutableDir(); exeDir != "" {
 		return exeDir
@@ -178,6 +185,17 @@ func loadWorkspacePromptBundle() string {
 	}
 
 	return strings.TrimSpace(strings.Join(sections, "\n\n"))
+}
+
+func loadWorkspaceBootstrapPrompt() string {
+	workspaceDir := getWorkspaceDir()
+	path := filepath.Join(workspaceDir, workspaceBootstrapFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	content := stripYAMLFrontmatter(string(data))
+	return strings.TrimSpace(content)
 }
 
 // ConversationKey generates a unique key for a conversation
@@ -433,6 +451,9 @@ func New(cfg Config) (*Agent, error) {
 		log.Printf("[AGENT] Markdown semantic search disabled: %v", err)
 	}
 	markdownMemory.StartWatcher(10 * time.Second)
+	if err := ensureWorkspaceContractFiles(); err != nil {
+		log.Printf("[AGENT] Failed to initialize workspace contract files: %v", err)
+	}
 
 	agent := &Agent{
 		modelRouter:        modelRouter,
@@ -448,6 +469,7 @@ func New(cfg Config) (*Agent, error) {
 		configPath:         config.ConfigPath(),
 		persistStore:       persistStore,
 		firstMessageSent:   make(map[string]bool),
+		bootstrapSent:      make(map[string]bool),
 		searchRegistry:     searchRegistry,
 		searchManager:      searchManager,
 	}
@@ -766,6 +788,16 @@ func (a *Agent) isFirstMessage(key string) bool {
 		return true
 	}
 	return false
+}
+
+func (a *Agent) consumeBootstrapOnce(key string) bool {
+	a.bootstrapMu.Lock()
+	defer a.bootstrapMu.Unlock()
+	if a.bootstrapSent[key] {
+		return false
+	}
+	a.bootstrapSent[key] = true
+	return true
 }
 
 // getReportNotification gets the report notification message
@@ -1331,6 +1363,10 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 
 	// Generate conversation key
 	convKey := ConversationKey(msg.Platform, msg.ChannelID, msg.UserID)
+	bootstrapPrompt := ""
+	if a.consumeBootstrapOnce(convKey) {
+		bootstrapPrompt = loadWorkspaceBootstrapPrompt()
+	}
 
 	// Build the tools list
 	tools := a.buildToolsList()
@@ -1602,6 +1638,9 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 	if workspacePromptBundle != "" {
 		systemPrompt = workspacePromptBundle + "\n\n" + systemPrompt
 	}
+	if bootstrapPrompt != "" {
+		systemPrompt = "# BOOTSTRAP.md\n\n" + bootstrapPrompt + "\n\n" + systemPrompt
+	}
 
 	if markdownMemoriesSection != "" {
 		systemPrompt += markdownMemoriesSection
@@ -1624,7 +1663,15 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 	// Optional promptbuild integration (disabled by default).
 	// When enabled, any failure falls back to legacy system prompt behavior.
 	if isPromptBuildEnabled() {
-		if pbPrompt, used, err := a.buildPromptWithPromptBuild(msg, thinkingPrompt, a.getReportNotification(), strings.TrimSpace(memoryRecallForPromptBuild.String()), plannerInstruction); err != nil {
+		if pbPrompt, used, err := a.buildPromptWithPromptBuild(
+			msg,
+			thinkingPrompt,
+			a.getReportNotification(),
+			strings.TrimSpace(memoryRecallForPromptBuild.String()),
+			plannerInstruction,
+			workspacePromptBundle,
+			bootstrapPrompt,
+		); err != nil {
 			logger.Warn("[Agent] promptbuild failed, fallback to legacy prompt: %v", err)
 		} else if used {
 			systemPrompt = pbPrompt + "\n\n" + systemPrompt
@@ -1721,7 +1768,15 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 	return router.Response{Text: resp.Content, Files: pendingFiles}, nil
 }
 
-func (a *Agent) buildPromptWithPromptBuild(msg router.Message, thinkingPrompt string, reportNotification string, memoryRecall string, plannerInstruction string) (string, bool, error) {
+func (a *Agent) buildPromptWithPromptBuild(
+	msg router.Message,
+	thinkingPrompt string,
+	reportNotification string,
+	memoryRecall string,
+	plannerInstruction string,
+	workspaceContract string,
+	bootstrapInstruction string,
+) (string, bool, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return "", false, err
@@ -1739,10 +1794,12 @@ func (a *Agent) buildPromptWithPromptBuild(msg router.Message, thinkingPrompt st
 			Limit:     200,
 		},
 		Inputs: map[string]string{
-			"thinking_prompt":     thinkingPrompt,
-			"report_notification": reportNotification,
-			"memory_recall":       memoryRecall,
-			"planner_instruction": plannerInstruction,
+			"thinking_prompt":       thinkingPrompt,
+			"report_notification":   reportNotification,
+			"memory_recall":         memoryRecall,
+			"planner_instruction":   plannerInstruction,
+			"workspace_contract":    workspaceContract,
+			"bootstrap_instruction": bootstrapInstruction,
 		},
 	}
 

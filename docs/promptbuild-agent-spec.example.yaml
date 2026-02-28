@@ -4,6 +4,7 @@ description: "Example prompt assembly contract for a daily research analyst agen
 defaults:
   include_section_headers: true
   max_history: 120
+  max_prompt_chars: 18000
 sections:
   - id: system_role
     title: System Role
@@ -12,6 +13,7 @@ sections:
     templates:
       - system/research_analyst_role.md
     order: 10
+    max_chars: 3000
 
   - id: task_objective
     title: Task Objective
@@ -19,6 +21,7 @@ sections:
     source_type: request_field
     source: requirements
     order: 20
+    max_chars: 1500
 
   - id: portfolio_constraints
     title: Portfolio Constraints
@@ -26,12 +29,14 @@ sections:
     source_type: references
     source: references/trading_style.md,references/current_positions.md
     order: 30
+    max_chars: 4000
 
   - id: evidence_digest
     title: Evidence Digest
     required: true
     source_type: references
     order: 40
+    max_chars: 5000
 
   - id: output_contract
     title: Output Contract
@@ -40,6 +45,7 @@ sections:
     templates:
       - format/daily_research_output.md
     order: 50
+    max_chars: 2000
 
   - id: analysis_instruction
     title: Analysis Instruction
@@ -47,3 +53,36 @@ sections:
     source_type: inline_text
     source: analysis_instruction
     order: 60
+    max_chars: 1000
+
+  - id: memory_recall
+    title: Memory Recall
+    required: false
+    source_type: inline_text
+    source: memory_recall
+    order: 70
+    max_chars: 3000
+
+  - id: planner_instruction
+    title: Planner Instruction
+    required: false
+    source_type: inline_text
+    source: planner_instruction
+    order: 80
+    max_chars: 1000
+
+  - id: workspace_contract
+    title: Workspace Contract
+    required: false
+    source_type: inline_text
+    source: workspace_contract
+    order: 85
+    max_chars: 5000
+
+  - id: bootstrap_instruction
+    title: Bootstrap Instruction
+    required: false
+    source_type: inline_text
+    source: bootstrap_instruction
+    order: 90
+    max_chars: 1200
