@@ -3,6 +3,8 @@ package cron
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -475,7 +477,16 @@ func (s *Scheduler) executeJob(job *Job) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
-		result, err := s.promptExecutor.ExecutePrompt(ctx, job.Platform, job.ChannelID, job.UserID, job.Prompt)
+		promptToRun := job.Prompt
+		heartbeatNotifyMode := ""
+		if job.Tag == "heartbeat" {
+			heartbeatNotifyMode, promptToRun = parseHeartbeatPromptMeta(job.Prompt)
+			if heartbeatNotifyMode == "auto" {
+				promptToRun = buildHeartbeatAutoPrompt(promptToRun)
+			}
+		}
+
+		result, err := s.promptExecutor.ExecutePrompt(ctx, job.Platform, job.ChannelID, job.UserID, promptToRun)
 		if err != nil {
 			s.mu.Lock()
 			job.LastError = err.Error()
@@ -492,8 +503,13 @@ func (s *Scheduler) executeJob(job *Job) {
 			s.mu.Unlock()
 			log.Printf("[CRON] Job prompt completed: %s (%s)", job.ID, job.Name)
 
-			if s.chatNotifier != nil && job.Platform != "" && job.ChannelID != "" {
-				s.chatNotifier.NotifyChatUser(job.Platform, job.ChannelID, job.UserID, result)
+			text := strings.TrimSpace(result)
+			shouldNotify := s.chatNotifier != nil && job.Platform != "" && job.ChannelID != ""
+			if job.Tag == "heartbeat" {
+				shouldNotify, text = decideHeartbeatNotification(job, heartbeatNotifyMode, result)
+			}
+			if shouldNotify && text != "" {
+				s.chatNotifier.NotifyChatUser(job.Platform, job.ChannelID, job.UserID, text)
 			}
 		}
 
@@ -611,6 +627,133 @@ func (s *Scheduler) executeExternalJob(ctx context.Context, job *Job) (string, e
 		return fmt.Sprintf("[external-agent] %s", text), nil
 	}
 	return text, nil
+}
+
+func parseHeartbeatPromptMeta(prompt string) (notifyMode string, cleanPrompt string) {
+	notifyMode = "never"
+	cleanPrompt = strings.TrimSpace(prompt)
+	if cleanPrompt == "" {
+		return notifyMode, cleanPrompt
+	}
+	line := cleanPrompt
+	rest := ""
+	if idx := strings.IndexByte(cleanPrompt, '\n'); idx >= 0 {
+		line = strings.TrimSpace(cleanPrompt[:idx])
+		rest = strings.TrimSpace(cleanPrompt[idx+1:])
+	}
+	const prefix = "[HEARTBEAT_NOTIFY="
+	if strings.HasPrefix(line, prefix) && strings.HasSuffix(line, "]") {
+		mode := strings.TrimSuffix(strings.TrimPrefix(line, prefix), "]")
+		notifyMode = normalizeHeartbeatNotifyMode(mode)
+		cleanPrompt = rest
+	}
+	return notifyMode, cleanPrompt
+}
+
+func normalizeHeartbeatNotifyMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case "never", "always", "on_change", "auto":
+		return mode
+	default:
+		return "never"
+	}
+}
+
+func buildHeartbeatAutoPrompt(prompt string) string {
+	instruction := `你正在执行 HEARTBEAT 巡检。
+请在第一行严格输出：HEARTBEAT_NOTIFY: yes 或 HEARTBEAT_NOTIFY: no
+然后再输出巡检正文（可多行）。`
+	return instruction + "\n\n" + strings.TrimSpace(prompt)
+}
+
+func decideHeartbeatNotification(job *Job, notifyMode string, rawResult string) (bool, string) {
+	notifyMode = normalizeHeartbeatNotifyMode(notifyMode)
+	text := strings.TrimSpace(rawResult)
+	explicitAuto, body, hasDecision := parseHeartbeatAutoDecision(text)
+	if hasDecision {
+		text = body
+	}
+
+	hash := heartbeatResultHash(text)
+	prevHash := heartbeatStoredHash(job.Source)
+	if hash != "" {
+		job.Source = heartbeatHashSource(hash)
+	}
+
+	switch notifyMode {
+	case "always":
+		return text != "", text
+	case "never":
+		return false, text
+	case "on_change":
+		// First run establishes baseline and does not notify.
+		if prevHash == "" {
+			return false, text
+		}
+		return hash != "" && hash != prevHash, text
+	case "auto":
+		if hasDecision {
+			return explicitAuto && text != "", text
+		}
+		if prevHash == "" {
+			return false, text
+		}
+		return hash != "" && hash != prevHash, text
+	default:
+		return false, text
+	}
+}
+
+func parseHeartbeatAutoDecision(result string) (notify bool, body string, hasDecision bool) {
+	result = strings.ReplaceAll(result, "\r\n", "\n")
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return false, "", false
+	}
+	first := result
+	rest := ""
+	if idx := strings.IndexByte(result, '\n'); idx >= 0 {
+		first = strings.TrimSpace(result[:idx])
+		rest = strings.TrimSpace(result[idx+1:])
+	}
+	if !strings.HasPrefix(strings.ToUpper(first), "HEARTBEAT_NOTIFY:") {
+		return false, result, false
+	}
+	raw := strings.TrimSpace(first[len("HEARTBEAT_NOTIFY:"):])
+	switch strings.ToLower(raw) {
+	case "yes", "true", "1":
+		return true, rest, true
+	case "no", "false", "0":
+		return false, rest, true
+	default:
+		return false, result, false
+	}
+}
+
+func heartbeatResultHash(text string) string {
+	normalized := strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
+	if normalized == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(normalized))
+	return hex.EncodeToString(sum[:])
+}
+
+func heartbeatStoredHash(source string) string {
+	const prefix = "heartbeat:last_hash="
+	source = strings.TrimSpace(source)
+	if !strings.HasPrefix(source, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(source, prefix))
+}
+
+func heartbeatHashSource(hash string) string {
+	if strings.TrimSpace(hash) == "" {
+		return ""
+	}
+	return "heartbeat:last_hash=" + hash
 }
 
 // countEnabled returns the number of enabled jobs

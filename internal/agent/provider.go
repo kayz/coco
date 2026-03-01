@@ -24,18 +24,20 @@ type ChatRequest struct {
 
 // ChatResponse represents a chat completion response
 type ChatResponse struct {
-	Content   string
-	ToolCalls []ToolCall
+	Content          string
+	ToolCalls        []ToolCall
+	ReasoningContent string
 	// FinishReason indicates why the model stopped: "stop", "tool_use", etc.
 	FinishReason string
 }
 
 // Message represents a chat message
 type Message struct {
-	Role       string // "user", "assistant", "tool"
-	Content    string
-	ToolCalls  []ToolCall       // For assistant messages with tool calls
-	ToolResult *ToolResult      // For tool result messages
+	Role             string // "user", "assistant", "tool"
+	Content          string
+	ReasoningContent string
+	ToolCalls        []ToolCall  // For assistant messages with tool calls
+	ToolResult       *ToolResult // For tool result messages
 }
 
 // ToolCall represents a tool invocation by the model

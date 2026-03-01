@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/kayz/coco/internal/agent"
@@ -43,7 +44,7 @@ var (
 )
 
 var relayCmd = &cobra.Command{
-	Use:   "relay",
+	Use:   "relay [platform]",
 	Short: "Connect to the cloud relay service",
 	Long: `Connect to the coco cloud relay service to process messages
 using your local AI API key.
@@ -61,6 +62,8 @@ User Flow (Feishu/Slack/WeChat):
 WeCom Cloud Relay:
   For WeCom, no user-id is needed - just provide your credentials.
   This command handles both callback verification AND message processing.
+
+  coco relay wecom
 
   coco relay --platform wecom \
     --wecom-corp-id YOUR_CORP_ID \
@@ -90,7 +93,8 @@ Environment variables:
   RELAY_PLATFORM       Alternative to --platform
   RELAY_SERVER_URL     Custom WebSocket server URL
   RELAY_WEBHOOK_URL    Custom webhook URL`,
-	Run: runRelay,
+	Args: cobra.MaximumNArgs(1),
+	Run:  runRelay,
 }
 
 func init() {
@@ -123,6 +127,16 @@ func init() {
 func runRelay(cmd *cobra.Command, args []string) {
 	if runModeServiceAction("relay", relayServiceAction) {
 		return
+	}
+
+	if argPlatform := normalizePlatformArg(args); argPlatform != "" {
+		if relayPlatform != "" && relayPlatform != argPlatform {
+			fmt.Fprintf(os.Stderr, "Error: conflicting platform values: --platform=%s and arg=%s\n", relayPlatform, argPlatform)
+			os.Exit(1)
+		}
+		if relayPlatform == "" {
+			relayPlatform = argPlatform
+		}
 	}
 
 	// Get values from flags or environment
@@ -246,6 +260,8 @@ func runRelay(cmd *cobra.Command, args []string) {
 	if relayUserID == "" {
 		if relayPlatform == "wecom" && relayWeComCorpID != "" {
 			relayUserID = "wecom-" + relayWeComCorpID
+		} else if relayPlatform == "wecom" {
+			relayUserID = buildFallbackRelayUserID("wecom")
 		} else if relayPlatform != "wecom" {
 			fmt.Fprintln(os.Stderr, "Error: --user-id is required (get it from /whoami)")
 			os.Exit(1)
@@ -387,4 +403,51 @@ func runRelay(cmd *cobra.Command, args []string) {
 	log.Println("Shutting down...")
 	cronScheduler.Stop()
 	r.Stop()
+}
+
+func normalizePlatformArg(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(args[0]))
+}
+
+func buildFallbackRelayUserID(platform string) string {
+	user := strings.TrimSpace(os.Getenv("USERNAME"))
+	if user == "" {
+		user = strings.TrimSpace(os.Getenv("USER"))
+	}
+	if user == "" {
+		user = "local"
+	}
+	host, err := os.Hostname()
+	if err != nil || strings.TrimSpace(host) == "" {
+		host = "host"
+	}
+	return sanitizeID(platform) + "-" + sanitizeID(user) + "-" + sanitizeID(host)
+}
+
+func sanitizeID(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return "x"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "x"
+	}
+	return out
 }

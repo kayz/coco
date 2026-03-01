@@ -113,6 +113,23 @@ func TestTemporalDecayScoreMonotonic(t *testing.T) {
 	}
 }
 
+func TestHistoricalEchoScore(t *testing.T) {
+	now := time.Now()
+	oldStrong := historicalEchoScore(now.Add(-400*24*time.Hour), 4.0)
+	newStrong := historicalEchoScore(now.Add(-10*24*time.Hour), 4.0)
+	oldWeak := historicalEchoScore(now.Add(-400*24*time.Hour), 0.8)
+
+	if oldStrong <= 0 {
+		t.Fatalf("expected positive echo score for old strong signal, got %f", oldStrong)
+	}
+	if newStrong != 0 {
+		t.Fatalf("expected no echo score for recent note, got %f", newStrong)
+	}
+	if oldWeak != 0 {
+		t.Fatalf("expected no echo score for weak lexical signal, got %f", oldWeak)
+	}
+}
+
 func TestMMRRerankCandidatesDiversifies(t *testing.T) {
 	cands := []memoryCandidate{
 		{
@@ -251,4 +268,41 @@ func TestMarkdownMemoryWatcherPollsAndEvictsDeletedFiles(t *testing.T) {
 	}
 
 	t.Fatalf("watcher did not evict deleted file from cache in time")
+}
+
+func TestMarkdownMemoryPutAppendAndOverwrite(t *testing.T) {
+	tmp := t.TempDir()
+	vaultDir := filepath.Join(tmp, "vault")
+	if err := os.MkdirAll(vaultDir, 0o755); err != nil {
+		t.Fatalf("mkdir vault: %v", err)
+	}
+
+	mem := NewMarkdownMemory(config.MemoryConfig{
+		Enabled:       true,
+		ObsidianVault: vaultDir,
+	})
+
+	r1, err := mem.Put("journal/day1.md", "alpha", "append")
+	if err != nil {
+		t.Fatalf("append create failed: %v", err)
+	}
+	if !strings.Contains(r1.Content, "alpha") {
+		t.Fatalf("unexpected content after first append: %s", r1.Content)
+	}
+
+	r2, err := mem.Put("journal/day1.md", "beta", "append")
+	if err != nil {
+		t.Fatalf("append update failed: %v", err)
+	}
+	if !strings.Contains(r2.Content, "alpha") || !strings.Contains(r2.Content, "beta") {
+		t.Fatalf("append should preserve both entries: %s", r2.Content)
+	}
+
+	r3, err := mem.Put("journal/day1.md", "gamma", "overwrite")
+	if err != nil {
+		t.Fatalf("overwrite failed: %v", err)
+	}
+	if strings.Contains(r3.Content, "alpha") || strings.Contains(r3.Content, "beta") || !strings.Contains(r3.Content, "gamma") {
+		t.Fatalf("overwrite should replace content, got: %s", r3.Content)
+	}
 }

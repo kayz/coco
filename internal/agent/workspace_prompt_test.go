@@ -79,9 +79,44 @@ func TestEnsureWorkspaceContractFiles(t *testing.T) {
 		t.Fatalf("ensure workspace files: %v", err)
 	}
 
-	for _, name := range []string{"AGENTS.md", "SOUL.md", "PROFILE.md", "MEMORY.md", "HEARTBEAT.md", "BOOTSTRAP.md"} {
+	for _, name := range []string{"AGENTS.md", "SOUL.md", "USER.md", "JD.md", "PROFILE.md", "MEMORY.md", "HEARTBEAT.md", "BOOTSTRAP.md"} {
 		if _, err := os.Stat(filepath.Join(tmp, name)); err != nil {
 			t.Fatalf("expected %s to exist: %v", name, err)
+		}
+	}
+}
+
+func TestTargetsWorkspaceSOUL(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("COCO_WORKSPACE_DIR", tmp)
+	soulPath := filepath.Join(tmp, "SOUL.md")
+	if err := os.WriteFile(soulPath, []byte("# SOUL"), 0o644); err != nil {
+		t.Fatalf("write SOUL.md: %v", err)
+	}
+
+	if !targetsWorkspaceSOUL(map[string]any{"path": soulPath}) {
+		t.Fatalf("expected SOUL path to be protected")
+	}
+	if targetsWorkspaceSOUL(map[string]any{"path": filepath.Join(tmp, "other.md")}) {
+		t.Fatalf("non-SOUL path should not be protected")
+	}
+}
+
+func TestIsExplicitSoulAppendIntent(t *testing.T) {
+	cases := []struct {
+		text string
+		want bool
+	}{
+		{text: "在你的SOUL文件里加上和蔼可亲的性格", want: true},
+		{text: "please append this to soul.md", want: true},
+		{text: "帮我总结今天任务", want: false},
+		{text: "灵魂很重要", want: false},
+	}
+
+	for _, c := range cases {
+		got := isExplicitSoulAppendIntent(c.text)
+		if got != c.want {
+			t.Fatalf("intent mismatch for %q: got=%v want=%v", c.text, got, c.want)
 		}
 	}
 }

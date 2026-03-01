@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/sashabaranov/go-openai"
@@ -57,6 +56,8 @@ func (p *DeepSeekProvider) Name() string {
 
 // Chat sends messages and returns a response
 func (p *DeepSeekProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	codec := newOpenAIToolCodec(req.Tools)
+
 	// Convert messages to OpenAI format
 	messages := make([]openai.ChatCompletionMessage, 0, len(req.Messages)+1)
 
@@ -70,25 +71,11 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req ChatRequest) (ChatRespo
 
 	// Add conversation messages
 	for _, msg := range req.Messages {
-		messages = append(messages, p.toOpenAIMessage(msg))
+		messages = append(messages, openAIMessageFromGeneric(msg, codec))
 	}
 
 	// Convert tools to OpenAI format
-	tools := make([]openai.Tool, 0, len(req.Tools))
-	for _, tool := range req.Tools {
-		var params map[string]interface{}
-		if err := json.Unmarshal(tool.InputSchema, &params); err != nil {
-			params = map[string]interface{}{"type": "object"}
-		}
-		tools = append(tools, openai.Tool{
-			Type: openai.ToolTypeFunction,
-			Function: &openai.FunctionDefinition{
-				Name:        tool.Name,
-				Description: tool.Description,
-				Parameters:  params,
-			},
-		})
-	}
+	tools := openAIToolsFromGeneric(req.Tools, codec)
 
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
@@ -111,96 +98,5 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req ChatRequest) (ChatRespo
 		return ChatResponse{}, fmt.Errorf("deepseek API error: %w", err)
 	}
 
-	return p.fromOpenAIResponse(resp), nil
-}
-
-// toOpenAIMessage converts a generic Message to OpenAI format
-func (p *DeepSeekProvider) toOpenAIMessage(msg Message) openai.ChatCompletionMessage {
-	switch msg.Role {
-	case "user":
-		if msg.ToolResult != nil {
-			content := msg.ToolResult.Content
-			if content == "" {
-				content = "(empty)"
-			}
-			return openai.ChatCompletionMessage{
-				Role:       openai.ChatMessageRoleTool,
-				Content:    content,
-				ToolCallID: msg.ToolResult.ToolCallID,
-			}
-		}
-		return openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleUser,
-			Content: msg.Content,
-		}
-
-	case "assistant":
-		m := openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleAssistant,
-			Content: msg.Content,
-		}
-		if len(msg.ToolCalls) > 0 {
-			m.ToolCalls = make([]openai.ToolCall, len(msg.ToolCalls))
-			for i, tc := range msg.ToolCalls {
-				m.ToolCalls[i] = openai.ToolCall{
-					ID:   tc.ID,
-					Type: openai.ToolTypeFunction,
-					Function: openai.FunctionCall{
-						Name:      tc.Name,
-						Arguments: string(tc.Input),
-					},
-				}
-			}
-		}
-		return m
-
-	case "tool":
-		content := msg.Content
-		if content == "" && msg.ToolResult != nil {
-			content = msg.ToolResult.Content
-		}
-		if content == "" {
-			content = "(empty)"
-		}
-		return openai.ChatCompletionMessage{
-			Role:       openai.ChatMessageRoleTool,
-			Content:    content,
-			ToolCallID: msg.ToolResult.ToolCallID,
-		}
-
-	default:
-		return openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleUser,
-			Content: msg.Content,
-		}
-	}
-}
-
-// fromOpenAIResponse converts OpenAI response to generic format
-func (p *DeepSeekProvider) fromOpenAIResponse(resp openai.ChatCompletionResponse) ChatResponse {
-	if len(resp.Choices) == 0 {
-		return ChatResponse{}
-	}
-
-	choice := resp.Choices[0]
-	var toolCalls []ToolCall
-
-	for _, tc := range choice.Message.ToolCalls {
-		toolCalls = append(toolCalls, ToolCall{
-			ID:    tc.ID,
-			Name:  tc.Function.Name,
-			Input: json.RawMessage(tc.Function.Arguments),
-		})
-	}
-
-	finishReason := "stop"
-	if choice.FinishReason == openai.FinishReasonToolCalls {
-		finishReason = "tool_use"
-	}
-
-	return ChatResponse{
-		Content:      choice.Message.Content,
-		ToolCalls:    toolCalls,
-		FinishReason: finishReason,
-	}
+	return genericResponseFromOpenAI(resp, codec), nil
 }

@@ -126,8 +126,12 @@ type workspacePromptFile struct {
 }
 
 var workspacePromptOrder = []workspacePromptFile{
-	{name: "AGENTS.md", required: true},
 	{name: "SOUL.md", required: true},
+	{name: "IDENTITY.md", required: false},
+	{name: "USER.md", required: false},
+	{name: "JD.md", required: false},
+	{name: "TOOLS.md", required: false},
+	{name: "AGENTS.md", required: true},
 	{name: "PROFILE.md", required: false},
 	{name: "MEMORY.md", required: false},
 	{name: "HEARTBEAT.md", required: false},
@@ -1363,6 +1367,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg router.Message) (router.R
 
 	// Generate conversation key
 	convKey := ConversationKey(msg.Platform, msg.ChannelID, msg.UserID)
+	a.ensureHeartbeatJobsForConversation(msg)
 	bootstrapPrompt := ""
 	if a.consumeBootstrapOnce(convKey) {
 		bootstrapPrompt = loadWorkspaceBootstrapPrompt()
@@ -1729,9 +1734,10 @@ Current date: %s`, autoApprovalNotice, runtime.GOOS, runtime.GOARCH, exeDir, msg
 
 		// Add assistant response with tool calls
 		messages = append(messages, Message{
-			Role:      "assistant",
-			Content:   resp.Content,
-			ToolCalls: resp.ToolCalls,
+			Role:             "assistant",
+			Content:          resp.Content,
+			ReasoningContent: resp.ReasoningContent,
+			ToolCalls:        resp.ToolCalls,
 		})
 
 		// Add tool results
@@ -1996,6 +2002,32 @@ func (a *Agent) buildToolsList() []Tool {
 					"path": map[string]string{"type": "string", "description": "文件路径（绝对路径或 vault 内相对路径）"},
 				},
 				"required": []string{"path"},
+			}),
+		},
+		{
+			Name:        "memory_write",
+			Description: "写入 Markdown 记忆文件（仅允许 Obsidian vault 和核心记忆文件）。可覆盖或追加。",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path":    map[string]string{"type": "string", "description": "文件路径（绝对路径或 vault 内相对路径）"},
+					"content": map[string]string{"type": "string", "description": "要写入的内容"},
+					"mode":    map[string]string{"type": "string", "description": "写入模式：append 或 overwrite（默认 append）"},
+				},
+				"required": []string{"path", "content"},
+			}),
+		},
+		{
+			Name:        "soul_append",
+			Description: "向 SOUL.md 追加一条人格成长记录（只追加，不覆盖历史内容）",
+			InputSchema: jsonSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"entry":   map[string]string{"type": "string", "description": "成长条目正文"},
+					"reason":  map[string]string{"type": "string", "description": "触发原因（可选）"},
+					"section": map[string]string{"type": "string", "description": "记录分组（默认 Growth Ledger）"},
+				},
+				"required": []string{"entry"},
 			}),
 		},
 		// === FILE OPERATIONS ===
@@ -2734,6 +2766,10 @@ func (a *Agent) executeTool(ctx context.Context, name string, input json.RawMess
 		return a.executeMemorySearch(ctx, args)
 	case "memory_get":
 		return a.executeMemoryGet(args)
+	case "memory_write":
+		return a.executeMemoryWrite(args)
+	case "soul_append":
+		return a.executeSoulAppend(args)
 	case "sessions_spawn":
 		return a.executeSessionsSpawn(args)
 	case "sessions_send":
@@ -2756,6 +2792,11 @@ func (a *Agent) executeTool(ctx context.Context, name string, input json.RawMess
 		if err := a.checkToolPathAccess(name, args, securitySnapshot.pathChecker); err != nil {
 			return err.Error()
 		}
+	}
+
+	// Protect workspace SOUL from destructive/overwrite operations.
+	if (name == "file_write" || name == "file_delete" || name == "file_move") && targetsWorkspaceSOUL(args) {
+		return "ACCESS DENIED: SOUL.md is append-only in runtime. Use `soul_append` to evolve personality traits."
 	}
 
 	if name == "shell_execute" {
@@ -3366,6 +3407,138 @@ func (a *Agent) executeMemoryGet(args map[string]any) string {
 	header := fmt.Sprintf("📄 Memory file: %s\nsource: %s\nupdated: %s\n\n",
 		result.Path, result.Source, result.ModifiedAt.Format("2006-01-02 15:04"))
 	return header + content
+}
+
+func (a *Agent) executeMemoryWrite(args map[string]any) string {
+	if a.markdownMemory == nil || !a.markdownMemory.IsEnabled() {
+		return "Error: markdown memory is disabled. Please configure memory.enabled and memory.obsidian_vault in ~/.coco.yaml"
+	}
+
+	path, _ := args["path"].(string)
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "Error: path is required"
+	}
+
+	content, _ := args["content"].(string)
+	if strings.TrimSpace(content) == "" {
+		return "Error: content is required"
+	}
+
+	mode, _ := args["mode"].(string)
+	mode = strings.TrimSpace(mode)
+
+	result, err := a.markdownMemory.Put(path, content, mode)
+	if err != nil {
+		return fmt.Sprintf("Error writing markdown memory: %v", err)
+	}
+
+	return fmt.Sprintf("Memory updated: %s\nsource: %s\nupdated: %s",
+		result.Path, result.Source, result.ModifiedAt.Format("2006-01-02 15:04"))
+}
+
+func targetsWorkspaceSOUL(args map[string]any) bool {
+	path, _ := args["path"].(string)
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	target := normalizePath(resolveBestEffortPath(path))
+	if target == "" {
+		target = normalizePath(path)
+	}
+	soulPath := normalizePath(filepath.Join(getWorkspaceDir(), "SOUL.md"))
+	return target != "" && target == soulPath
+}
+
+func (a *Agent) executeSoulAppend(args map[string]any) string {
+	if strings.EqualFold(strings.TrimSpace(a.currentMsg.Username), "cron") {
+		return "ACCESS DENIED: soul_append cannot be executed by heartbeat/cron. Trigger it explicitly in a user conversation."
+	}
+	if !isExplicitSoulAppendIntent(a.currentMsg.Text) {
+		return "ACCESS DENIED: soul_append requires explicit user intent in current message (e.g. \"在你的SOUL文件里追加...\")."
+	}
+
+	entry, _ := args["entry"].(string)
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return "Error: entry is required"
+	}
+
+	reason, _ := args["reason"].(string)
+	reason = strings.TrimSpace(reason)
+	section, _ := args["section"].(string)
+	section = strings.TrimSpace(section)
+	if section == "" {
+		section = "Growth Ledger"
+	}
+
+	soulPath := filepath.Join(getWorkspaceDir(), "SOUL.md")
+	existingBytes, err := os.ReadFile(soulPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			existingBytes = []byte("# SOUL\n")
+		} else {
+			return fmt.Sprintf("Error reading SOUL.md: %v", err)
+		}
+	}
+	existing := strings.TrimRight(string(existingBytes), "\n")
+
+	timestamp := time.Now().Format("2006-01-02 15:04")
+	var b strings.Builder
+	b.WriteString(existing)
+	b.WriteString("\n\n## ")
+	b.WriteString(section)
+	b.WriteString("\n")
+	b.WriteString("- Time: ")
+	b.WriteString(timestamp)
+	b.WriteString("\n")
+	if reason != "" {
+		b.WriteString("- Reason: ")
+		b.WriteString(reason)
+		b.WriteString("\n")
+	}
+	b.WriteString("- Entry: ")
+	b.WriteString(entry)
+	b.WriteString("\n")
+
+	if err := os.WriteFile(soulPath, []byte(b.String()), 0o644); err != nil {
+		return fmt.Sprintf("Error writing SOUL.md: %v", err)
+	}
+
+	return fmt.Sprintf("SOUL updated (append-only): %s\nTime: %s", soulPath, timestamp)
+}
+
+func isExplicitSoulAppendIntent(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+	soulHints := []string{
+		"soul", "soul.md", "人格", "灵魂", "灵魂文件",
+	}
+	actionHints := []string{
+		"加", "添加", "追加", "更新", "写入", "改", "修改",
+		"append", "add", "update", "write", "modify",
+	}
+
+	hasSoulHint := false
+	for _, h := range soulHints {
+		if strings.Contains(text, h) {
+			hasSoulHint = true
+			break
+		}
+	}
+	if !hasSoulHint {
+		return false
+	}
+
+	for _, h := range actionHints {
+		if strings.Contains(text, h) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Agent) executeSessionsSpawn(args map[string]any) string {

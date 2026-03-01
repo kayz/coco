@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -462,6 +464,91 @@ func (s *keeperServer) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	go s.handleCocoResponse(body)
 }
 
+// handleHeartbeatUpload receives HEARTBEAT.md content from onboard bootstrap.
+func (s *keeperServer) handleHeartbeatUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if token := strings.TrimSpace(s.cfg.Keeper.Token); token != "" {
+		authToken := ""
+		if h := strings.TrimSpace(r.Header.Get("Authorization")); strings.HasPrefix(strings.ToLower(h), "bearer ") {
+			authToken = strings.TrimSpace(h[len("bearer "):])
+		}
+		if authToken == "" {
+			authToken = strings.TrimSpace(r.Header.Get("X-Keeper-Token"))
+		}
+		if authToken == "" {
+			authToken = strings.TrimSpace(r.URL.Query().Get("token"))
+		}
+		if authToken != token {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read failed", http.StatusBadRequest)
+		return
+	}
+
+	var payload struct {
+		Filename string `json:"filename"`
+		Content  string `json:"content"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, "invalid json payload", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(payload.Content) == "" {
+		http.Error(w, "content is required", http.StatusBadRequest)
+		return
+	}
+
+	filename := strings.TrimSpace(payload.Filename)
+	if filename == "" {
+		filename = "HEARTBEAT.md"
+	}
+	filename = filepath.Base(filename)
+	if !strings.EqualFold(filepath.Ext(filename), ".md") {
+		http.Error(w, "filename must be a .md file", http.StatusBadRequest)
+		return
+	}
+
+	workspaceDir := keeperWorkspaceDir()
+	if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+		http.Error(w, "failed to create workspace dir", http.StatusInternalServerError)
+		return
+	}
+	target := filepath.Join(workspaceDir, filename)
+	if err := os.WriteFile(target, []byte(payload.Content), 0644); err != nil {
+		http.Error(w, "failed to save heartbeat", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":   true,
+		"path": target,
+	})
+}
+
+func keeperWorkspaceDir() string {
+	if env := strings.TrimSpace(os.Getenv("COCO_WORKSPACE_DIR")); env != "" {
+		return env
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		if wd, wdErr := os.Getwd(); wdErr == nil {
+			return wd
+		}
+		return "."
+	}
+	return filepath.Dir(execPath)
+}
+
 // ---------- Main entry ----------
 
 func runKeeper(cmd *cobra.Command, args []string) {
@@ -504,6 +591,7 @@ func runKeeper(cmd *cobra.Command, args []string) {
 	mux.HandleFunc("/wecom", srv.handleWeComCallback)
 	mux.HandleFunc("/webhook", srv.handleWebhook)
 	mux.HandleFunc("/health", srv.handleHealth)
+	mux.HandleFunc("/api/heartbeat/upload", srv.handleHeartbeatUpload)
 
 	addr := fmt.Sprintf(":%d", port)
 	httpServer := &http.Server{
@@ -517,6 +605,7 @@ func runKeeper(cmd *cobra.Command, args []string) {
 		logger.Info("[Keeper] WeCom callback: http://0.0.0.0%s/wecom", addr)
 		logger.Info("[Keeper] Webhook:        http://0.0.0.0%s/webhook", addr)
 		logger.Info("[Keeper] Health check:   http://0.0.0.0%s/health", addr)
+		logger.Info("[Keeper] Bootstrap API:  http://0.0.0.0%s/api/heartbeat/upload", addr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("[Keeper] Server error: %v", err)
 			os.Exit(1)

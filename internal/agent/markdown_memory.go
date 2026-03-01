@@ -53,6 +53,7 @@ type memoryCandidate struct {
 	Source       string
 	LexicalScore float64
 	RecencyScore float64
+	EchoScore    float64
 	Semantic     float64
 	Score        float64
 	Embedding    []float32
@@ -261,7 +262,8 @@ func (m *MarkdownMemory) Search(ctx context.Context, query string, limit int) ([
 			continue
 		}
 		recency := temporalDecayScore(item.modTime)
-		score := lexical + 0.65*recency
+		echo := historicalEchoScore(item.modTime, lexical)
+		score := lexical + 0.65*recency + echo
 		if c.source == "core" {
 			score += 0.8
 		}
@@ -277,6 +279,7 @@ func (m *MarkdownMemory) Search(ctx context.Context, query string, limit int) ([
 			Source:       c.source,
 			LexicalScore: lexical,
 			RecencyScore: recency,
+			EchoScore:    echo,
 		})
 	}
 
@@ -388,7 +391,7 @@ func (m *MarkdownMemory) applySemanticAndMMR(ctx context.Context, query string, 
 		}
 		candidates[i].Semantic = semantic
 		lexNorm := candidates[i].LexicalScore / maxLex
-		score := 0.50*semantic + 0.30*lexNorm + 0.20*candidates[i].RecencyScore
+		score := 0.50*semantic + 0.26*lexNorm + 0.20*candidates[i].RecencyScore + 0.04*candidates[i].EchoScore
 		if candidates[i].Source == "core" {
 			score += 0.05
 		}
@@ -430,6 +433,62 @@ func (m *MarkdownMemory) Get(path string) (MarkdownMemoryResult, error) {
 		Score:      0,
 		Source:     source,
 	}, nil
+}
+
+// Put writes markdown memory content into an allowed path.
+// mode: "append" (default) or "overwrite".
+func (m *MarkdownMemory) Put(path, content, mode string) (MarkdownMemoryResult, error) {
+	if !m.IsEnabled() {
+		return MarkdownMemoryResult{}, fmt.Errorf("markdown memory is disabled")
+	}
+
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return MarkdownMemoryResult{}, fmt.Errorf("path is required")
+	}
+	if strings.TrimSpace(content) == "" {
+		return MarkdownMemoryResult{}, fmt.Errorf("content is required")
+	}
+
+	resolved, err := m.resolveAllowedPath(path)
+	if err != nil {
+		return MarkdownMemoryResult{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+		return MarkdownMemoryResult{}, err
+	}
+
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = "append"
+	}
+	if mode != "append" && mode != "overwrite" {
+		return MarkdownMemoryResult{}, fmt.Errorf("unsupported mode: %s", mode)
+	}
+
+	newContent := strings.TrimSpace(content)
+	if mode == "append" {
+		if existing, err := os.ReadFile(resolved); err == nil {
+			base := strings.TrimSpace(string(existing))
+			if base != "" {
+				newContent = base + "\n\n" + newContent
+			}
+		}
+	}
+
+	if err := os.WriteFile(resolved, []byte(newContent), 0o644); err != nil {
+		return MarkdownMemoryResult{}, err
+	}
+
+	// Evict stale cache entries so subsequent reads use the latest content.
+	m.mu.Lock()
+	delete(m.cache, resolved)
+	m.mu.Unlock()
+	m.embMu.Lock()
+	delete(m.embeddingCache, resolved)
+	m.embMu.Unlock()
+
+	return m.Get(resolved)
 }
 
 func (m *MarkdownMemory) resolveCoreFiles() []string {
@@ -678,6 +737,19 @@ func temporalDecayScore(modifiedAt time.Time) float64 {
 	}
 	const halfLifeDays = 30.0
 	return math.Exp(-math.Ln2 * days / halfLifeDays)
+}
+
+func historicalEchoScore(modifiedAt time.Time, lexical float64) float64 {
+	if modifiedAt.IsZero() || lexical <= 0 {
+		return 0
+	}
+	days := time.Since(modifiedAt).Hours() / 24
+	if days < 180 || lexical < 2.2 {
+		return 0
+	}
+	ageFactor := math.Min(days/365.0, 2.0)
+	lexFactor := math.Min(lexical/6.0, 1.0)
+	return 0.18 * ageFactor * lexFactor
 }
 
 func buildSemanticText(c memoryCandidate) string {

@@ -51,13 +51,18 @@ type Config struct {
 
 // KeeperConfig holds configuration for Keeper mode (public server).
 type KeeperConfig struct {
-	Port         int    `yaml:"port,omitempty"`  // HTTP listen port, default 8080
-	Token        string `yaml:"token,omitempty"` // Auth token for coco connections
-	WeComCorpID  string `yaml:"wecom_corp_id,omitempty"`
-	WeComAgentID string `yaml:"wecom_agent_id,omitempty"`
-	WeComSecret  string `yaml:"wecom_secret,omitempty"`
-	WeComToken   string `yaml:"wecom_token,omitempty"`   // WeCom callback verification token
-	WeComAESKey  string `yaml:"wecom_aes_key,omitempty"` // WeCom callback EncodingAESKey
+	Port            int    `yaml:"port,omitempty"`  // HTTP listen port, default 8080
+	Token           string `yaml:"token,omitempty"` // Auth token for coco connections
+	WeComCorpID     string `yaml:"wecom_corp_id,omitempty"`
+	WeComAgentID    string `yaml:"wecom_agent_id,omitempty"`
+	WeComSecret     string `yaml:"wecom_secret,omitempty"`
+	WeComToken      string `yaml:"wecom_token,omitempty"`   // WeCom callback verification token
+	WeComAESKey     string `yaml:"wecom_aes_key,omitempty"` // WeCom callback EncodingAESKey
+	BootstrapURL    string `yaml:"bootstrap_url,omitempty"`
+	DefaultProvider string `yaml:"default_provider,omitempty"`
+	DefaultBaseURL  string `yaml:"default_base_url,omitempty"`
+	DefaultModel    string `yaml:"default_model,omitempty"`
+	DefaultAPIKey   string `yaml:"default_api_key,omitempty"`
 }
 
 // SearchEngineConfig 单个搜索引擎配置
