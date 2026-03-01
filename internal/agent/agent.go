@@ -53,6 +53,7 @@ type Agent struct {
 	registry              *ai.Registry
 	providerCache         map[string]Provider
 	providerMu            sync.RWMutex
+	providerKeyCursor     map[string]int
 	memory                *ConversationMemory
 	ragMemory             *RAGMemory
 	markdownMemory        *MarkdownMemory
@@ -80,6 +81,7 @@ type Agent struct {
 	latestReport          *persist.DailyReport
 	searchRegistry        *search.Registry
 	searchManager         *search.Manager
+	remoteCron            *remoteCronClient
 }
 
 // Config holds agent configuration
@@ -208,17 +210,29 @@ func ConversationKey(platform, channelID, userID string) string {
 }
 
 func (a *Agent) chatWithModel(ctx context.Context, req ChatRequest) (ChatResponse, error) {
-	model := a.modelRouter.GetCurrentModel()
+	role := a.currentRequestModelRole()
+	return a.chatWithModelForRole(ctx, req, role)
+}
+
+func (a *Agent) currentRequestModelRole() string {
+	if strings.EqualFold(strings.TrimSpace(a.currentMsg.Username), "cron") {
+		return ai.RoleCron
+	}
+	return ai.RolePrimary
+}
+
+func (a *Agent) chatWithModelForRole(ctx context.Context, req ChatRequest, role string) (ChatResponse, error) {
+	model := a.modelRouter.PickModelForRole(role)
 	if model == nil {
 		return ChatResponse{}, fmt.Errorf("no current model")
 	}
 
-	provider, err := a.getProviderForModel(model)
+	provider, err := a.getProviderForModel(model, role)
 	if err != nil {
 		return ChatResponse{}, fmt.Errorf("failed to get provider for model %s: %w", model.Name, err)
 	}
 
-	logger.Debug("[AGENT] Using model: %s (provider: %s)", model.Name, model.Provider)
+	logger.Debug("[AGENT] Using model: %s (provider: %s, role: %s)", model.Name, model.Provider, role)
 
 	resp, err := provider.Chat(ctx, req)
 	if err == nil {
@@ -226,17 +240,17 @@ func (a *Agent) chatWithModel(ctx context.Context, req ChatRequest) (ChatRespons
 		return resp, nil
 	}
 
-	logger.Warn("[AGENT] Model %s failed: %v", model.Name, err)
+	logger.Warn("[AGENT] Model %s failed (role=%s): %v", model.Name, role, err)
 	a.modelRouter.RecordFailure(model)
 
-	newModel, failoverErr := a.modelRouter.Failover()
+	newModel, failoverErr := a.modelRouter.FailoverForRole(role, model)
 	if failoverErr != nil {
 		return ChatResponse{}, fmt.Errorf("model %s failed, and failover failed: %w", model.Name, err)
 	}
 
-	logger.Info("[AGENT] Failover to model: %s", newModel.Name)
+	logger.Info("[AGENT] Failover to model: %s (role=%s)", newModel.Name, role)
 
-	newProvider, err := a.getProviderForModel(newModel)
+	newProvider, err := a.getProviderForModel(newModel, role)
 	if err != nil {
 		return ChatResponse{}, fmt.Errorf("failed to get provider for failover model %s: %w", newModel.Name, err)
 	}
@@ -244,6 +258,13 @@ func (a *Agent) chatWithModel(ctx context.Context, req ChatRequest) (ChatRespons
 	resp, err = newProvider.Chat(ctx, req)
 	if err == nil {
 		a.modelRouter.RecordSuccess(newModel)
+		if role == ai.RolePrimary && a.modelRouter.ShouldRotatePrimary(model) {
+			if switchErr := a.modelRouter.SwitchToModel(newModel.Name, true); switchErr != nil {
+				logger.Warn("[AGENT] Failed to rotate primary model to %s: %v", newModel.Name, switchErr)
+			} else {
+				logger.Info("[AGENT] Primary model rotated to %s after repeated failures", newModel.Name)
+			}
+		}
 		return resp, nil
 	}
 
@@ -253,8 +274,20 @@ func (a *Agent) chatWithModel(ctx context.Context, req ChatRequest) (ChatRespons
 	return ChatResponse{}, fmt.Errorf("all models failed, last error: %w", err)
 }
 
-func (a *Agent) getProviderForModel(model *ai.ModelConfig) (Provider, error) {
-	key := model.Provider + ":" + model.Code
+func (a *Agent) getProviderForModel(model *ai.ModelConfig, role string) (Provider, error) {
+	if model == nil {
+		return nil, fmt.Errorf("model is nil")
+	}
+
+	providerConfig, ok := a.registry.GetProvider(model.Provider)
+	if !ok {
+		return nil, fmt.Errorf("provider not found: %s", model.Provider)
+	}
+	apiKey, err := a.selectProviderAPIKey(providerConfig, role)
+	if err != nil {
+		return nil, err
+	}
+	key := model.Provider + ":" + model.Code + ":" + apiKey
 
 	a.providerMu.RLock()
 	if provider, ok := a.providerCache[key]; ok {
@@ -270,12 +303,7 @@ func (a *Agent) getProviderForModel(model *ai.ModelConfig) (Provider, error) {
 		return provider, nil
 	}
 
-	providerConfig, ok := a.registry.GetProvider(model.Provider)
-	if !ok {
-		return nil, fmt.Errorf("provider not found: %s", model.Provider)
-	}
-
-	provider, err := a.createProvider(providerConfig, model.Code)
+	provider, err := a.createProvider(providerConfig, model.Code, apiKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create provider %s: %w", model.Provider, err)
 	}
@@ -284,38 +312,58 @@ func (a *Agent) getProviderForModel(model *ai.ModelConfig) (Provider, error) {
 	return provider, nil
 }
 
-func (a *Agent) createProvider(cfg *ai.ProviderConfig, modelCode string) (Provider, error) {
+func (a *Agent) selectProviderAPIKey(cfg *ai.ProviderConfig, role string) (string, error) {
+	keys := cfg.Keys()
+	if len(keys) == 0 {
+		return "", fmt.Errorf("provider %s has no configured api key", cfg.Name)
+	}
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role != ai.RoleExpert || len(keys) == 1 {
+		return keys[0], nil
+	}
+
+	a.providerMu.Lock()
+	defer a.providerMu.Unlock()
+	if a.providerKeyCursor == nil {
+		a.providerKeyCursor = make(map[string]int)
+	}
+	idx := a.providerKeyCursor[cfg.Name] % len(keys)
+	a.providerKeyCursor[cfg.Name] = (idx + 1) % len(keys)
+	return keys[idx], nil
+}
+
+func (a *Agent) createProvider(cfg *ai.ProviderConfig, modelCode, apiKey string) (Provider, error) {
 	switch cfg.Type {
 	case "deepseek":
 		return NewDeepSeekProvider(DeepSeekConfig{
-			APIKey:  cfg.APIKey,
+			APIKey:  apiKey,
 			BaseURL: cfg.BaseURL,
 			Model:   modelCode,
 		})
 	case "kimi", "moonshot":
 		return NewKimiProvider(KimiConfig{
-			APIKey:  cfg.APIKey,
+			APIKey:  apiKey,
 			BaseURL: cfg.BaseURL,
 			Model:   modelCode,
 		})
 	case "qwen", "qianwen", "tongyi":
 		return NewQwenProvider(QwenConfig{
-			APIKey:  cfg.APIKey,
+			APIKey:  apiKey,
 			BaseURL: cfg.BaseURL,
 			Model:   modelCode,
 		})
 	case "claude", "anthropic", "":
 		return NewClaudeProvider(ClaudeConfig{
-			APIKey:  cfg.APIKey,
+			APIKey:  apiKey,
 			BaseURL: cfg.BaseURL,
 			Model:   modelCode,
 		})
 	default:
-		return a.createOpenAICompatProvider(cfg, modelCode)
+		return a.createOpenAICompatProvider(cfg, modelCode, apiKey)
 	}
 }
 
-func (a *Agent) createOpenAICompatProvider(cfg *ai.ProviderConfig, modelCode string) (Provider, error) {
+func (a *Agent) createOpenAICompatProvider(cfg *ai.ProviderConfig, modelCode, apiKey string) (Provider, error) {
 	defaults := map[string]struct {
 		baseURL string
 		model   string
@@ -379,7 +427,7 @@ func (a *Agent) createOpenAICompatProvider(cfg *ai.ProviderConfig, modelCode str
 
 	return NewOpenAICompatProvider(OpenAICompatConfig{
 		ProviderName: name,
-		APIKey:       cfg.APIKey,
+		APIKey:       apiKey,
 		BaseURL:      baseURL,
 		Model:        model,
 		DefaultURL:   defaultURL,
@@ -463,6 +511,7 @@ func New(cfg Config) (*Agent, error) {
 		modelRouter:        modelRouter,
 		registry:           registry,
 		providerCache:      make(map[string]Provider),
+		providerKeyCursor:  make(map[string]int),
 		memory:             memory,
 		ragMemory:          ragMemory,
 		markdownMemory:     markdownMemory,
@@ -476,6 +525,7 @@ func New(cfg Config) (*Agent, error) {
 		bootstrapSent:      make(map[string]bool),
 		searchRegistry:     searchRegistry,
 		searchManager:      searchManager,
+		remoteCron:         newRemoteCronClient(configCfg),
 	}
 	agent.applySecurityConfig(
 		cfg.AllowedPaths,
@@ -617,6 +667,7 @@ func (a *Agent) applyModelRouterConfig(modelCooldown string) {
 
 	a.providerMu.Lock()
 	a.providerCache = make(map[string]Provider)
+	a.providerKeyCursor = make(map[string]int)
 	a.providerMu.Unlock()
 }
 
@@ -1235,7 +1286,10 @@ func speedRank(speed string) int {
 }
 
 func (a *Agent) selectPlannerModel() *ai.ModelConfig {
-	models := a.modelRouter.ListModels()
+	models := a.modelRouter.ListModelsForRole(ai.RoleExpert)
+	if len(models) == 0 {
+		models = a.modelRouter.ListModels()
+	}
 	if len(models) == 0 {
 		return nil
 	}
@@ -1255,7 +1309,10 @@ func (a *Agent) selectPlannerModel() *ai.ModelConfig {
 }
 
 func (a *Agent) selectFinalModel(complexity string) *ai.ModelConfig {
-	models := a.modelRouter.ListModels()
+	models := a.modelRouter.ListModelsForRole(ai.RoleExpert)
+	if len(models) == 0 {
+		models = a.modelRouter.ListModels()
+	}
 	if len(models) == 0 {
 		return nil
 	}
@@ -3690,6 +3747,7 @@ func (a *Agent) executeAIListModels() string {
 		return "No models available"
 	}
 
+	now := time.Now()
 	var sb strings.Builder
 	sb.WriteString("可用模型列表：\n\n")
 	for _, m := range models {
@@ -3698,6 +3756,16 @@ func (a *Agent) executeAIListModels() string {
 		sb.WriteString(fmt.Sprintf("  - 速度：%s\n", m.SpeedText()))
 		sb.WriteString(fmt.Sprintf("  - 费用：%s\n", m.CostText()))
 		sb.WriteString(fmt.Sprintf("  - 能力：%s\n", m.SkillsText()))
+		if len(m.Roles) > 0 {
+			sb.WriteString(fmt.Sprintf("  - 角色：%s\n", strings.Join(m.Roles, "、")))
+		}
+		status := "enabled"
+		if !m.IsEnabled() {
+			status = "disabled"
+		} else if m.IsTemporarilyDisabled(now) {
+			status = "off-shelf"
+		}
+		sb.WriteString(fmt.Sprintf("  - 状态：%s\n", status))
 		sb.WriteString("\n")
 	}
 	return sb.String()
@@ -3733,5 +3801,15 @@ func (a *Agent) executeAIGetCurrentModel() string {
 	sb.WriteString(fmt.Sprintf("  - 速度：%s\n", model.SpeedText()))
 	sb.WriteString(fmt.Sprintf("  - 费用：%s\n", model.CostText()))
 	sb.WriteString(fmt.Sprintf("  - 能力：%s\n", model.SkillsText()))
+	if len(model.Roles) > 0 {
+		sb.WriteString(fmt.Sprintf("  - 角色：%s\n", strings.Join(model.Roles, "、")))
+	}
+	status := "enabled"
+	if !model.IsEnabled() {
+		status = "disabled"
+	} else if model.IsTemporarilyDisabled(time.Now()) {
+		status = "off-shelf"
+	}
+	sb.WriteString(fmt.Sprintf("  - 状态：%s\n", status))
 	return sb.String()
 }

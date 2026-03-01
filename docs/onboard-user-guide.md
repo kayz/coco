@@ -14,13 +14,13 @@ coco onboard [flags]
 
 ## 2. 交互流程
 `coco onboard` 会依次完成：
-1. 运行模式
-2. AI provider / apikey / 模型
-3. relay/keeper 必填运行参数
-4. SOUL/USER/IDENTITY/JD/HEARTBEAT/MEMORY/TOOLS 文件写入
-5. Obsidian vault 绑定 + 索引写入
-6. 工具目录导出 + 工具烟雾测试
-7. 开机启动配置 + 完成提示
+1. 运行模式 + AI provider/apikey/模型 + relay/keeper 运行参数
+2. SOUL/USER/IDENTITY/JD/HEARTBEAT/MEMORY/TOOLS 文件写入
+3. Obsidian vault 绑定 + 索引写入
+4. keeper 地址登记（仅写配置，不做联通测试）
+5. 工具目录导出 + 工具烟雾测试
+6. 开机启动配置
+7. 完成提示（退出后直接运行 `coco.exe`）
 
 ## 3. 关键输出文件
 - 配置：`.coco.yaml`、`.coco/providers.yaml`、`.coco/models.yaml`
@@ -30,8 +30,8 @@ coco onboard [flags]
 - Obsidian 索引：默认写入 `<vault>/.coco/coco-index.md`
 
 ## 4. Keeper 说明
-当前版本的 `onboard` 不再处理 keeper 连接测试和 heartbeat 上传。  
-keeper 保持手工配置，避免初始化流程过长。
+当前版本的 `onboard` 仅登记 `keeper.base_url`，不处理 keeper 连接测试和 heartbeat 上传。  
+keeper 在线验证保持手工执行，避免初始化流程过长。
 
 ## 5. 非交互示例（both）
 ```bash

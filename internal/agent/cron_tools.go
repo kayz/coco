@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	cronpkg "github.com/kayz/coco/internal/cron"
 )
@@ -46,6 +48,15 @@ func (a *Agent) executeCronCreate(args map[string]any) string {
 
 	var job *cronpkg.Job
 	var err error
+	if a.remoteCron != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+		job, err = a.createRemoteCronJob(ctx, name, tag, jobType, schedule, message, prompt, tool, endpoint, authHeader, args)
+		if err != nil {
+			return fmt.Sprintf("Error creating keeper scheduled task: %v", err)
+		}
+		return a.formatCreatedCronJob(job)
+	}
 
 	// Prompt-based job: run full AI conversation on schedule
 	if prompt != "" {
@@ -138,19 +149,75 @@ func (a *Agent) executeCronCreate(args map[string]any) string {
 	return "Error: either 'prompt', 'message', or 'tool' is required"
 }
 
+func (a *Agent) createRemoteCronJob(ctx context.Context, name, tag, jobType, schedule, message, prompt, tool, endpoint, authHeader string, args map[string]any) (*cronpkg.Job, error) {
+	req := remoteCronCreateRequest{
+		Name:      name,
+		Tag:       tag,
+		Type:      strings.TrimSpace(jobType),
+		Schedule:  schedule,
+		Message:   message,
+		Prompt:    prompt,
+		Tool:      tool,
+		Endpoint:  endpoint,
+		Auth:      authHeader,
+		Platform:  a.currentMsg.Platform,
+		ChannelID: a.currentMsg.ChannelID,
+		UserID:    a.currentMsg.UserID,
+	}
+	if v, ok := args["relay_mode"].(bool); ok {
+		req.RelayMode = v
+	}
+	if rawArgs, ok := args["arguments"].(map[string]any); ok {
+		req.Arguments = rawArgs
+	}
+	return a.remoteCron.Create(ctx, req)
+}
+
+func (a *Agent) formatCreatedCronJob(job *cronpkg.Job) string {
+	if job == nil {
+		return "Scheduled task created on keeper."
+	}
+	switch {
+	case job.Endpoint != "":
+		return fmt.Sprintf("Keeper scheduled external task created:\n- ID: %s\n- Name: %s\n- Schedule: %s\n- Tag: %s\n- Endpoint: %s\n- Relay mode: %t", job.ID, job.Name, job.Schedule, job.Tag, job.Endpoint, job.RelayMode)
+	case job.Prompt != "":
+		return fmt.Sprintf("Keeper scheduled AI task created:\n- ID: %s\n- Name: %s\n- Schedule: %s\n- Tag: %s\n- Prompt: %s", job.ID, job.Name, job.Schedule, job.Tag, job.Prompt)
+	case job.Message != "":
+		return fmt.Sprintf("Keeper scheduled message task created:\n- ID: %s\n- Name: %s\n- Schedule: %s\n- Tag: %s\n- Message: %s", job.ID, job.Name, job.Schedule, job.Tag, job.Message)
+	case job.Tool != "":
+		return fmt.Sprintf("Keeper scheduled tool task created:\n- ID: %s\n- Name: %s\n- Schedule: %s\n- Tag: %s\n- Tool: %s", job.ID, job.Name, job.Schedule, job.Tag, job.Tool)
+	default:
+		return fmt.Sprintf("Keeper scheduled task created:\n- ID: %s\n- Name: %s\n- Schedule: %s\n- Tag: %s", job.ID, job.Name, job.Schedule, job.Tag)
+	}
+}
+
 // executeCronList lists all scheduled tasks, optionally filtered by tag
 func (a *Agent) executeCronList(args map[string]any) string {
 	if a.cronScheduler == nil {
-		return "Error: cron scheduler not available"
+		if a.remoteCron == nil {
+			return "Error: cron scheduler not available"
+		}
 	}
 
-	var jobs []*cronpkg.Job
 	tag, _ := args["tag"].(string)
+	var (
+		jobs []*cronpkg.Job
+		err  error
+	)
 
-	if tag != "" {
-		jobs = a.cronScheduler.ListJobsByTag(tag)
+	if a.remoteCron != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+		jobs, err = a.remoteCron.List(ctx, a.currentMsg, tag)
+		if err != nil {
+			return fmt.Sprintf("Error listing keeper scheduled tasks: %v", err)
+		}
 	} else {
-		jobs = a.cronScheduler.ListJobs()
+		if tag != "" {
+			jobs = a.cronScheduler.ListJobsByTag(tag)
+		} else {
+			jobs = a.cronScheduler.ListJobs()
+		}
 	}
 
 	if len(jobs) == 0 {
@@ -198,12 +265,23 @@ func (a *Agent) executeCronList(args map[string]any) string {
 // executeCronDelete deletes a scheduled task
 func (a *Agent) executeCronDelete(args map[string]any) string {
 	if a.cronScheduler == nil {
-		return "Error: cron scheduler not available"
+		if a.remoteCron == nil {
+			return "Error: cron scheduler not available"
+		}
 	}
 
 	id, _ := args["id"].(string)
 	if id == "" {
 		return "Error: id is required"
+	}
+
+	if a.remoteCron != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+		if err := a.remoteCron.Delete(ctx, id); err != nil {
+			return fmt.Sprintf("Error: %v", err)
+		}
+		return fmt.Sprintf("Keeper scheduled task %s deleted.", id)
 	}
 
 	if err := a.cronScheduler.RemoveJob(id); err != nil {
@@ -215,12 +293,23 @@ func (a *Agent) executeCronDelete(args map[string]any) string {
 // executeCronPause pauses a scheduled task
 func (a *Agent) executeCronPause(args map[string]any) string {
 	if a.cronScheduler == nil {
-		return "Error: cron scheduler not available"
+		if a.remoteCron == nil {
+			return "Error: cron scheduler not available"
+		}
 	}
 
 	id, _ := args["id"].(string)
 	if id == "" {
 		return "Error: id is required"
+	}
+
+	if a.remoteCron != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+		if err := a.remoteCron.Pause(ctx, id); err != nil {
+			return fmt.Sprintf("Error: %v", err)
+		}
+		return fmt.Sprintf("Keeper scheduled task %s paused.", id)
 	}
 
 	if err := a.cronScheduler.PauseJob(id); err != nil {
@@ -232,12 +321,23 @@ func (a *Agent) executeCronPause(args map[string]any) string {
 // executeCronResume resumes a paused scheduled task
 func (a *Agent) executeCronResume(args map[string]any) string {
 	if a.cronScheduler == nil {
-		return "Error: cron scheduler not available"
+		if a.remoteCron == nil {
+			return "Error: cron scheduler not available"
+		}
 	}
 
 	id, _ := args["id"].(string)
 	if id == "" {
 		return "Error: id is required"
+	}
+
+	if a.remoteCron != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+		if err := a.remoteCron.Resume(ctx, id); err != nil {
+			return fmt.Sprintf("Error: %v", err)
+		}
+		return fmt.Sprintf("Keeper scheduled task %s resumed.", id)
 	}
 
 	if err := a.cronScheduler.ResumeJob(id); err != nil {

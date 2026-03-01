@@ -329,7 +329,7 @@ coco skill install <name>
 | 单一二进制 | ✅ | Go 编译 |
 | Keeper 模式 | ✅ | v1.9.0 — 自建公网服务端，企业微信 Webhook + WebSocket 转发 |
 | coco 连接自建 Keeper | ✅ | v1.9.0 — relay 模式指向自建 Keeper，跳过本地 WeCom 凭证 |
-| 离线兜底 | ✅ | v1.9.0 — coco 离线时 Keeper 返回固定文本 |
+| 离线兜底 | ✅ | v1.9.0+ — coco 离线时 keeper 可走低价 LLM 代答，无 key 自动回落固定文案 |
 | PromptBuild 模块 | ✅ | v1.9.0 — 无状态 Prompt 组装（SQLite + Markdown 模板） |
 | Shell 安全策略配置贯通 | ✅ | `security.blocked_commands` / `security.require_confirmation` 已接入运行时执行链路 |
 | 安全策略热更新 | ✅ | 消息处理前按配置文件 mtime 自动重载，无需重启 |
@@ -343,7 +343,7 @@ coco skill install <name>
 | 企业微信 Webhook 自托管 | ✅ 完成 | URL 验证 + 消息解密转发 |
 | coco 连接自建 Keeper | ✅ 完成 | relay 模式，自建 Keeper 跳过 WeCom 凭证校验 |
 | 消息透传链路 | ✅ 完成 | 企业微信 → Keeper → coco → AI → 回复，全链路验证通过 |
-| 离线兜底 | ✅ 完成 | coco 离线时返回固定文本 |
+| 离线兜底 | ✅ 完成 | coco 离线时 keeper 可走低价 LLM 代答，无 key 时回落固定文案 |
 | 断线自动重连 | ✅ 完成 | coco 重启 / Keeper 重启均自动恢复 |
 | 部署文档 | ✅ 完成 | `docs/keeper-setup.md` + `docs/phase0-verification.md` |
 
@@ -357,6 +357,8 @@ coco skill install <name>
 | AI 工具调用切换模型 | ✅ 已完成 | 🟡 中 | 已有模型管理工具 |
 | 模型能力配置（capabilities/cost）完善 | ✅ 已完成 | 🔴 高 | 支持能力/费用/速度分层配置 |
 | 按应用可用模型池隔离 | ✅ 已完成 | 🔴 高 | 运行时按 agent/cron/search 维度生效 |
+| 模型治理命令 | ✅ 已完成 | 🔴 高 | `coco doctor models` / `coco models bench` / `coco models enable|disable` |
+| API key 池（专家任务） | ✅ 已完成 | 🟡 中 | `providers.yaml` 支持 `api_keys`，专家任务轮换，主模型保持稳定 |
 
 #### Phase 2：外部 Agent 应用（✅ 已完成）
 
@@ -408,7 +410,8 @@ coco skill install <name>
 | Docker 支持 | ✅ 已完成 | 🟢 低 | Dockerfile + docker-compose + healthcheck |
 | 子 Agent 系统 | ✅ 已完成 | 🟢 低 | sessions_spawn |
 | Agent 间通信 | ✅ 已完成 | 🟢 低 | sessions_send |
-| Keeper 离线时兜底 LLM 完善 | 🟡 规划中 | 🟡 中 | 继续优化离线答复质量 |
+| Keeper 离线时兜底 LLM 完善 | ✅ 已完成 | 🟡 中 | keeper 有默认低价模型时启用轻量代答，无 key 自动降级固定文案 |
+| Keeper Cron API | ✅ 已完成 | 🟡 中 | `/api/cron/*` + relay 侧 `relay.cron_on_keeper` 远端调度接入 |
 
 #### Phase 7：工作区产品化（✅ 已完成）
 

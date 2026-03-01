@@ -48,9 +48,10 @@ Flow:
   1) AI key and runtime essentials
   2) Persona + memory/tool contracts
   3) Obsidian vault link and index
-  4) Tool capability export and checks
-  5) Autostart setup
-  6) Final handoff`,
+  4) Keeper address registration (no online test)
+  5) Tool capability export and checks
+  6) Autostart setup
+  7) Final handoff`,
 	RunE: runOnboard,
 }
 
@@ -168,6 +169,7 @@ type modelYAML struct {
 	Speed     string   `yaml:"speed"`
 	Cost      string   `yaml:"cost"`
 	Skills    []string `yaml:"skills"`
+	Roles     []string `yaml:"roles,omitempty"`
 }
 
 type builtInTool struct {
@@ -280,6 +282,7 @@ func runOnboard(cmd *cobra.Command, args []string) error {
 		phase1BootstrapStep(),
 		phase2PersonaStep(),
 		phase3ObsidianStep(),
+		phase4KeeperStep(),
 		phase5ToolsStep(),
 		phase6AutostartStep(),
 		phase7FinishStep(),
@@ -814,48 +817,24 @@ func phase4KeeperStep() onboardStep {
 		Questions: []onboardQuestion{
 			{
 				Key:      "keeper.base_url",
-				Prompt:   "Keeper base URL for bootstrap API",
-				Required: true,
+				Prompt:   "Keeper base URL (register only, no connection test)",
+				Required: false,
 				Default:  defaultKeeperBaseURL,
-				Validate: validateHTTPURL,
-			},
-			{
-				Key:      "keeper.test_connection",
-				Prompt:   "Run keeper health connection test now? (yes/no)",
-				Required: true,
-				Default:  func(s *onboardState) string { return onboardValue("keeper.test_connection", s) },
-				Validate: validateBool,
-			},
-			{
-				Key:      "keeper.default_api_key",
-				Prompt:   "Keeper default API key (optional)",
-				Required: false,
-				Default:  func(s *onboardState) string { return onboardValue("keeper.default_api_key", s) },
-			},
-			{
-				Key:      "keeper.upload_heartbeat",
-				Prompt:   "Upload HEARTBEAT.md to keeper? (yes/no)",
-				Required: true,
-				Default:  func(s *onboardState) string { return onboardValue("keeper.upload_heartbeat", s) },
-				Validate: validateBool,
-			},
-			{
-				Key:      "keeper.upload_token",
-				Prompt:   "Keeper upload token (optional; defaults to keeper/relay token)",
-				Required: false,
-				Default:  defaultKeeperUploadToken,
-				Condition: func(s *onboardState) bool {
-					return parseBoolDefault(s.answers["keeper.upload_heartbeat"], true)
+				Validate: func(v string, s *onboardState) error {
+					if strings.TrimSpace(v) == "" {
+						return nil
+					}
+					return validateHTTPURL(v, s)
 				},
 			},
 		},
-		Apply: applyKeeperBootstrap,
+		Apply: applyKeeperRegistration,
 	}
 }
 
 func phase5ToolsStep() onboardStep {
 	return onboardStep{
-		Name: "phase4-tools",
+		Name: "phase5-tools",
 		Questions: []onboardQuestion{
 			{
 				Key:      "tools.export",
@@ -878,7 +857,7 @@ func phase5ToolsStep() onboardStep {
 
 func phase6AutostartStep() onboardStep {
 	return onboardStep{
-		Name: "phase5-autostart",
+		Name: "phase6-autostart",
 		Questions: []onboardQuestion{
 			{
 				Key:      "autostart.enable",
@@ -904,7 +883,7 @@ func phase6AutostartStep() onboardStep {
 
 func phase7FinishStep() onboardStep {
 	return onboardStep{
-		Name: "phase6-finish",
+		Name: "phase7-finish",
 		Apply: func(s *onboardState) error {
 			fmt.Println("Setup handoff:")
 			fmt.Printf("  1) Exit current process\n")
@@ -1169,39 +1148,13 @@ func applyObsidianSetup(s *onboardState) error {
 	return nil
 }
 
-func applyKeeperBootstrap(s *onboardState) error {
+func applyKeeperRegistration(s *onboardState) error {
 	baseURL := strings.TrimRight(strings.TrimSpace(s.answers["keeper.base_url"]), "/")
 	if baseURL == "" {
-		return errors.New("keeper.base_url is required")
+		return nil
 	}
 	s.cfg.Keeper.BootstrapURL = baseURL
-
-	defaultAPIKey := strings.TrimSpace(s.answers["keeper.default_api_key"])
-	if defaultAPIKey != "" {
-		s.cfg.Keeper.DefaultAPIKey = defaultAPIKey
-		s.cfg.Keeper.DefaultProvider = strings.TrimSpace(resolveProviderName(s))
-		s.cfg.Keeper.DefaultBaseURL = strings.TrimSpace(s.answers["ai.base_url"])
-		s.cfg.Keeper.DefaultModel = strings.TrimSpace(s.answers["ai.model.primary"])
-	}
-
-	if parseBoolDefault(s.answers["keeper.test_connection"], true) {
-		status, cocoStatus, err := testKeeperHealth(baseURL)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Keeper health check: status=%s coco=%s\n", status, cocoStatus)
-	}
-
-	if parseBoolDefault(s.answers["keeper.upload_heartbeat"], true) {
-		token := strings.TrimSpace(s.answers["keeper.upload_token"])
-		hbPath := filepath.Join(s.workspaceDir, "HEARTBEAT.md")
-		uploadedPath, err := uploadHeartbeatToKeeper(baseURL, token, hbPath)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Heartbeat uploaded to keeper: %s\n", uploadedPath)
-	}
-
+	fmt.Printf("Keeper base URL registered: %s\n", baseURL)
 	return nil
 }
 
@@ -1844,6 +1797,7 @@ func writeAIRegistry(s *onboardState) error {
 	if fallbackCode != "" && fallbackCode != primaryCode {
 		models = append(models, buildModelYAML(fallbackCode, providerName, template))
 	}
+	annotateModelRoles(models, primaryCode)
 
 	mf := modelsYAML{Models: models}
 	md, err := yaml.Marshal(mf)
@@ -1883,7 +1837,122 @@ func buildModelYAML(code, providerName string, template providerTemplate) modelY
 		Speed:     mt.Speed,
 		Cost:      mt.Cost,
 		Skills:    mt.Skills,
+		Roles:     nil,
 	}
+}
+
+func annotateModelRoles(models []modelYAML, primaryCode string) {
+	if len(models) == 0 {
+		return
+	}
+	primaryIdx := 0
+	for i := range models {
+		if strings.EqualFold(strings.TrimSpace(models[i].Code), strings.TrimSpace(primaryCode)) {
+			primaryIdx = i
+			break
+		}
+	}
+
+	for i := range models {
+		roles := make([]string, 0, 3)
+		if i == primaryIdx {
+			roles = append(roles, "primary")
+		}
+		if strings.EqualFold(models[i].Intellect, "full") || strings.EqualFold(models[i].Intellect, "excellent") || hasSkillName(models[i].Skills, "thinking") {
+			roles = append(roles, "expert")
+		}
+		models[i].Roles = dedupeStable(roles)
+	}
+
+	cronIdx := pickCronModelIndex(models)
+	if cronIdx >= 0 {
+		models[cronIdx].Roles = dedupeStable(append(models[cronIdx].Roles, "cron"))
+	}
+}
+
+func pickCronModelIndex(models []modelYAML) int {
+	if len(models) == 0 {
+		return -1
+	}
+	best := 0
+	for i := 1; i < len(models); i++ {
+		a := models[i]
+		b := models[best]
+		if modelCostRank(a.Cost) != modelCostRank(b.Cost) {
+			if modelCostRank(a.Cost) < modelCostRank(b.Cost) {
+				best = i
+			}
+			continue
+		}
+		if modelSpeedRank(a.Speed) != modelSpeedRank(b.Speed) {
+			if modelSpeedRank(a.Speed) > modelSpeedRank(b.Speed) {
+				best = i
+			}
+			continue
+		}
+		if modelIntellectRank(a.Intellect) > modelIntellectRank(b.Intellect) {
+			best = i
+		}
+	}
+	return best
+}
+
+func modelCostRank(cost string) int {
+	switch strings.ToLower(strings.TrimSpace(cost)) {
+	case "free":
+		return 0
+	case "low":
+		return 1
+	case "medium":
+		return 2
+	case "high":
+		return 3
+	case "expensive":
+		return 4
+	default:
+		return 5
+	}
+}
+
+func modelSpeedRank(speed string) int {
+	switch strings.ToLower(strings.TrimSpace(speed)) {
+	case "fast":
+		return 3
+	case "medium":
+		return 2
+	case "slow":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func modelIntellectRank(intellect string) int {
+	switch strings.ToLower(strings.TrimSpace(intellect)) {
+	case "full":
+		return 4
+	case "excellent":
+		return 3
+	case "good":
+		return 2
+	case "usable":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func hasSkillName(skills []string, name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return false
+	}
+	for _, s := range skills {
+		if strings.EqualFold(strings.TrimSpace(s), name) {
+			return true
+		}
+	}
+	return false
 }
 
 func currentMode(s *onboardState) string {

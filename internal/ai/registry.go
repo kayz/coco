@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -42,20 +43,25 @@ func ModelsPath() string {
 }
 
 type ProviderConfig struct {
-	Name    string `yaml:"name"`
-	Type    string `yaml:"type"`
-	BaseURL string `yaml:"base_url"`
-	APIKey  string `yaml:"api_key"`
+	Name    string   `yaml:"name"`
+	Type    string   `yaml:"type"`
+	BaseURL string   `yaml:"base_url"`
+	APIKey  string   `yaml:"api_key"`
+	APIKeys []string `yaml:"api_keys,omitempty"`
 }
 
 type ModelConfig struct {
-	Name      string   `yaml:"name"`
-	Code      string   `yaml:"code"`
-	Provider  string   `yaml:"provider"`
-	Intellect string   `yaml:"intellect"`
-	Speed     string   `yaml:"speed"`
-	Cost      string   `yaml:"cost"`
-	Skills    []string `yaml:"skills"`
+	Name           string   `yaml:"name"`
+	Code           string   `yaml:"code"`
+	Provider       string   `yaml:"provider"`
+	Intellect      string   `yaml:"intellect"`
+	Speed          string   `yaml:"speed"`
+	Cost           string   `yaml:"cost"`
+	Skills         []string `yaml:"skills"`
+	Roles          []string `yaml:"roles,omitempty"`
+	Enabled        *bool    `yaml:"enabled,omitempty"`
+	DisabledUntil  string   `yaml:"disabled_until,omitempty"`
+	DisabledReason string   `yaml:"disabled_reason,omitempty"`
 }
 
 func (m *ModelConfig) IntellectText() string {
@@ -142,6 +148,92 @@ func (m *ModelConfig) IntellectRank() int {
 	default:
 		return 0
 	}
+}
+
+func (m *ModelConfig) HasSkill(skill string) bool {
+	if m == nil {
+		return false
+	}
+	skill = strings.ToLower(strings.TrimSpace(skill))
+	if skill == "" {
+		return false
+	}
+	for _, s := range m.Skills {
+		if strings.EqualFold(strings.TrimSpace(s), skill) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *ModelConfig) HasRole(role string) bool {
+	if m == nil {
+		return false
+	}
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role == "" {
+		return false
+	}
+	for _, r := range m.Roles {
+		if strings.EqualFold(strings.TrimSpace(r), role) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *ModelConfig) IsEnabled() bool {
+	if m == nil {
+		return false
+	}
+	if m.Enabled == nil {
+		return true
+	}
+	return *m.Enabled
+}
+
+func (m *ModelConfig) IsTemporarilyDisabled(now time.Time) bool {
+	if m == nil {
+		return false
+	}
+	until := strings.TrimSpace(m.DisabledUntil)
+	if until == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, until)
+	if err != nil {
+		return false
+	}
+	return now.Before(t)
+}
+
+func (m *ModelConfig) IsAvailable(now time.Time) bool {
+	if !m.IsEnabled() {
+		return false
+	}
+	if m.IsTemporarilyDisabled(now) {
+		return false
+	}
+	return true
+}
+
+func (p *ProviderConfig) Keys() []string {
+	if p == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(p.APIKeys)+1)
+	for _, key := range p.APIKeys {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		if key := strings.TrimSpace(p.APIKey); key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
 
 type Registry struct {

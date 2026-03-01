@@ -18,6 +18,8 @@
 7. `phase6/plan.md`
 8. `phase7/plan.md`
 
+每个 phase 目录补充了 `acceptance.md`（phase2+），用于真人验收与回归打勾。
+
 通用回归命令：
 
 ```bash

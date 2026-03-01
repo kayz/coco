@@ -99,6 +99,7 @@ type RelayConfig struct {
 	ServerURL     string `yaml:"server_url,omitempty"`      // Custom relay server WebSocket URL
 	WebhookURL    string `yaml:"webhook_url,omitempty"`     // Custom relay server webhook URL
 	UseMediaProxy bool   `yaml:"use_media_proxy,omitempty"` // Proxy media download/upload through relay server
+	CronOnKeeper  bool   `yaml:"cron_on_keeper,omitempty"`  // Route cron create/list/manage to Keeper HTTP API
 }
 
 type SkillsConfig struct {
